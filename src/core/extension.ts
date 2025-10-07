@@ -124,6 +124,9 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         }
         Toolbar.getInstance().updateConfig();
 
+    } else if (event.affectsConfiguration('turbocat.preferredBuildType')) {
+        Builder.getInstance().updateConfig();
+
     } else if (event.affectsConfiguration('turbocat.browser') ||
         event.affectsConfiguration('turbocat.autoReloadBrowser')) {
         Browser.getInstance().updateConfig();

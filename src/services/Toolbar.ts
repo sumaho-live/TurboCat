@@ -110,16 +110,18 @@ export class Toolbar {
         const smartDeploy = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy', 'Disable');
         this.isSmartDeployEnabled = smartDeploy === 'Smart';
         
+        this.smartDeployButton.text = "$(zap)";
+        
         if (this.isSmartDeployEnabled) {
-            this.smartDeployButton.text = "$(zap) ON";
             this.smartDeployButton.tooltip = "Smart Deploy is enabled - Click to disable";
             this.smartDeployButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+            this.smartDeployButton.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
         } else {
-            this.smartDeployButton.text = "$(zap) OFF";
             this.smartDeployButton.tooltip = "Smart Deploy is disabled - Click to enable";
             this.smartDeployButton.backgroundColor = undefined;
+            this.smartDeployButton.color = new vscode.ThemeColor('statusBarItem.inactiveForeground');
         }
-        
+
         this.smartDeployButton.show();
     }
     
@@ -152,25 +154,33 @@ export class Toolbar {
                 this.isServerRunning = isRunning;
                 
                 if (isRunning) {
-                    // Server is running - show stop button, reload, hide start and debug
+                    // Server is running - show stop & reload, hide start/debug/deploy
                     this.startButton.hide();
                     this.debugButton.hide();
+                    this.deployButton.hide();
                     this.stopButton.show();
                     this.reloadButton.show();
                     
                     // Change background color to indicate running state
                     this.stopButton.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
                     this.reloadButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+                    this.startButton.backgroundColor = undefined;
+                    this.debugButton.backgroundColor = undefined;
+                    this.deployButton.backgroundColor = undefined;
                 } else {
-                    // Server is stopped - show start and debug buttons, hide stop and reload
+                    // Server is stopped - show start/debug/deploy, hide stop/reload
                     this.startButton.show();
                     this.debugButton.show();
+                    this.deployButton.show();
                     this.stopButton.hide();
                     this.reloadButton.hide();
                     
                     // Change background color to indicate ready state
                     this.startButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
                     this.debugButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+                    this.deployButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+                    this.stopButton.backgroundColor = undefined;
+                    this.reloadButton.backgroundColor = undefined;
                 }
             }
         } catch (err) {

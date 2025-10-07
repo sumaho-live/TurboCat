@@ -1,155 +1,66 @@
-# Tomcat Extension Architecture
+# TurboCat Architecture
 
-## Core Component Structure
+The TurboCat extension is organised around a small set of singleton services that collaborate through the activation entry point in `src/core/extension.ts`.
 
-```mermaid
-classDiagram
-    class Tomcat {
-        +getInstance(): Tomcat
-        +start(): Promise<void>
-        +stop(): Promise<void>
-        +clean(): Promise<void>
-        +reload(): Promise<void>
-        +updatePort(): Promise<void>
-        -validatePort(port: number): Promise<void>
-        -addTomcatUser(tomcatHome: string): Promise<void>
-    }
-    
-    class Builder {
-        +getInstance(): Builder
-        +deploy(type: 'Fast'|'Maven'|'Gradle'|'Choice'): Promise<void>
-        +autoDeploy(reason: vscode.TextDocumentSaveReason): Promise<void>
-        -fastDeploy(): Promise<void>
-        -mavenDeploy(): Promise<void>
-        -gradleDeploy(): Promise<void>
-        +isJavaEEProject(): boolean
-    }
-    
-    class Browser {
-        +getInstance(): Browser
-        +run(appName: string): Promise<void>
-        -handleWebSocketReload(): Promise<void>
-        -checkProcess(): Promise<boolean>
-    }
-    
-    class Logger {
-        +getInstance(): Logger
-        +info(message: string): void
-        +error(message: string, error?: Error): void
-        +updateStatusBar(text: string): void
-        +toggleDeploySetting(): Promise<void>
-    }
-    
-    class Vscode
-    
-    Tomcat --> Logger : Logging
-    Builder --> Tomcat : Deployment Coordination
-    Builder --> Browser : Reload Trigger
-    Builder --> Logger : Build Status
-    Browser --> Logger : Error Reporting
-    Tomcat --> Vscode : Configuration Management
-    Builder --> Vscode : Workspace Interaction
-    Logger --> Vscode : Status Bar Integration
+## Module Map
+
+```
+src/
+├─ core/
+│  └─ extension.ts        # Extension activation / deactivation, command registration
+├─ services/
+│  ├─ Tomcat.ts           # Tomcat lifecycle, configuration, and manager API integration
+│  ├─ Builder.ts          # Deployment orchestration and smart deploy watchers
+│  ├─ Browser.ts          # Browser automation via Chrome DevTools and fallbacks
+│  ├─ Logger.ts           # Unified logging stream and Tomcat log watchers
+│  └─ Toolbar.ts          # Status-bar controls driven by Tomcat state
+└─ utils/
+   └─ syntax.ts           # Output channel syntax colouring rules
 ```
 
-## Component Responsibilities
+All services follow the singleton pattern (`getInstance()`) to ensure there is a single source of truth for workspace configuration and runtime state.
 
-### 1. Tomcat Manager
-- **Server Lifecycle**: Start/stop using catalina.sh/bat scripts with proper JAVA_HOME and CATALINA_HOME [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Tomcat.ts#L584-L647)
-- **Port Management**: Validate port range (1024-49151), update server.xml connector with delay handling [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Tomcat.ts#L470-L582)
-- **Environment Detection**: Locate CATALINA_HOME and JAVA_HOME through config or user input [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Tomcat.ts#L331-L436)
-- **Clean Operations**: Remove non-essential webapps while preserving ROOT/docs/examples
-- **Health Checks**: Verify running status through port scanning and netstat commands [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Tomcat.ts#L303-L329)
-- **User Management**: Auto-add admin user to tomcat-users.xml for custom manager access [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Tomcat.ts#L649-L681)
+## Responsibilities
 
-### 2. Deployment Builder
-- **Build Strategies**:
-  - *Fast*: Uses memory list instead of temp and builds directly into webapps folder [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L328-L400)
-  - *Maven*: Execute mvn clean package with enhanced error message parsing [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L402-L468)
-  - *Gradle*: Run gradle war task with project-specific configuration [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L470-L501)
-- **Project Detection**: Identify JavaEE projects through WEB-INF, Maven POM, or Gradle files [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L121-L159)
-- **Auto-Deploy**: Trigger deployments on save (Ctrl+S/Cmd+S) based on configuration [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L247-L274)
-- **Project Scaffolding**: Create new Maven webapp projects using archetype-webapp [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Builder.ts#L276-L326)
-- **Build Duration**: Logs and reports build completion time for performance tracking
+### Tomcat Service
+- Discovers and validates Tomcat/JDK locations.
+- Launches, stops, cleans, and reloads the server.
+- Updates `server.xml` on port changes and writes back to workspace settings.
+- Streams Tomcat process output to the logger and triggers browser refresh keywords.
 
-### 3. Browser Controller
-- **Cross-Platform Support**: Windows/Mac/Linux command variants for Chrome, Edge, Opera, Brave, Firefox, and Safari
-- **Debug Protocol**: WebSocket integration for page reload without full browser restart [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Browser.ts#L286-L334)
-- **Process Management**: Detect running instances, kill hung processes on deployment
-- **Smart Reload**: Maintain existing browser sessions when possible
-- **Supported Browsers**:
-  | Browser        | CDP Support | Auto-Reload | Process Management |
-  |----------------|-------------|-------------|--------------------|
-  | Chrome         | ✓           | ✓           | Advanced           |
-  | Edge           | ✓           | ✓           | Advanced           |
-  | Opera          | ✓           | ✓           | Advanced           |
-  | Brave          | ✓           | ✓           | Advanced           |
-  | Firefox        | Limited     | ✗           | Basic              |
-  | Safari         | ✗           | ✗           | Basic              |
+### Builder Service
+- Detects project structure (Maven / Gradle / local) and remembers explicit overrides.
+- Executes the correct deployment flow:
+  - Maven – `mvn clean package`.
+  - Gradle – `gradlew war`.
+  - Local – `javac` compilation + file synchronisation.
+- Runs dual smart deploy watchers:
+  - Static resources (`src/**/*`) deploy immediately.
+  - Compiled classes (`target/classes`, `build/classes`, etc.) are batched before syncing.
+- Coordinates batch reload decisions and maps file changes to Tomcat destinations.
 
-### 4. Logging System
-- **Initializeation**: Editor button and status bar toggle for enabling/disabling auto-deploy [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Logger.ts#L220-L244)
-- **Multi-Channel Output**: VSCode output channel + status bar + toast notifications
-- **Status Visualization**: Animated icons for active deployments
-- **Error Handling**: Organized error messages for Java debugging and compilation
-- **Syntax Coloring**: Enhanced output channel with Java-specific syntax highlighting
-- **Toggle auto deploy**: Enable/disable auto-deploy on button click [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/utils/Logger.ts#L199-L218)
+### Browser Service
+- Launches and reloads browsers with Chrome DevTools (CDP) when available.
+- Falls back to fresh launches and optional process termination prompts.
+- Respects workspace settings for browser preference and auto reload.
 
-#### Syntax Coloring Implementation
+### Logger Service
+- Maintains a single VS Code Output channel (`TurboCat`).
+- Prefixes extension logs with `【turbocat】[LEVEL]` while streaming Tomcat output untouched.
+- Watches the Tomcat `logs/` directory and tails new access logs without reformatting.
+- Exposes helper methods (`info`, `success`, `warn`, `error`, `appendRawLine`) used by other services.
 
-**Architecture**:
-```mermaid
-graph TD
-    A[Output Channel] --> B[TextMate Grammar]
-    A --> C[Color Customization]
-    B --> D[Token Scopes]
-    C --> D
-    D --> E[Themed Display]
-```
+### Toolbar Service
+- Creates status-bar buttons for start/stop/debug/deploy/reload/clean/smart deploy.
+- Polls the Tomcat service to determine which buttons should be visible at any moment.
+- Colours the smart deploy button instead of relying on textual `ON/OFF` labels.
+- Disposes resources cleanly on deactivation.
 
-**Implementation Strategy**:
+## Activation Flow
+1. `activate()` instantiates the services and registers commands.
+2. The toolbar initialises and starts polling server state.
+3. Syntax colouring rules are merged into the workspace.
+4. Configuration change listeners propagate updates to the relevant services.
+5. When the extension is deactivated the services gracefully stop watchers and processes.
 
-1. **Grammar Definition**:
-   - Uses TextMate grammar format for tokenization
-   - Custom scope name `source.tomcat-log`
-   - Pattern matching for:
-     - Timestamps `[01/01/2024, 12:00 PM]`
-     - Log levels (INFO/DEBUG/ERROR)
-     - Java file paths (`*.java`, `*.jsp`)
-     - Build durations (`123ms`)
-     - Error indicators (`^~~~` patterns)
-     - Java syntax elements (classes, methods, annotations) [View Grammar](https://github.com/Al-rimi/tomcat/blob/main/syntaxes/tomcat-log.tmLanguage.json)
-
-2. **Color Customization**:
-   - Non-destructive merge with user themes
-   - Semantic scope mapping [View Code](https://github.com/Al-rimi/tomcat/blob/main/src/ui/syntax.ts)
-   - Theme-aware color selection:
-     - 6 log level categories
-     - 12 Java syntax types
-     - 4 error severity levels
-
-**Activation Flow**:
-1. Extension registers `tomcat-log` grammar
-2. Logger initializes output channel
-3. `addSyntaxColoringRules()` merges customizations:
-   ```typescript
-   config.update('editor.tokenColorCustomizations', 
-     { textMateRules: mergedRules },
-     vscode.ConfigurationTarget.Global
-   );
-   ```
-4. VS Code renderer applies scoped styles
-
-**Key Features**:
-- Preserves user theme settings through non-destructive merging
-- Supports dark/light theme variants automatically
-- Highlights build errors with red underline markers
-- Differentiates Java types from framework classes
-- Shows live deployment durations in green
-- Formats XML config paths with italic style
-
-**Integration Points**:
-- Extends VS Code's output channel rendering
-- Works with all built-in color themes
-- Compatible with semantic highlighting API
-- Exposes customization points through `contributes.grammars`
+This structure keeps the extension modular, testable, and easy to extend with additional workflows.

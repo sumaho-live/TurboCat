@@ -1,196 +1,32 @@
-# Testing Protocol
+# Testing TurboCat
 
-## Test Architecture
+TurboCat uses the VS Code extension testing harness (Mocha + Chai) that runs against the compiled bundle in `out/`.
 
-```mermaid
-graph TD
-    A[CI Pipeline] --> B[Unit Tests]
-    A --> C[Integration Tests]
-    A --> D[Cross-Platform Tests]
-    B --> E[Tomcat Class]
-    B --> F[Builder Class]
-    C --> G[Deployment Scenarios]
-    D --> H[Windows]
-    D --> I[macOS]
-    D --> J[Linux]
-```
+## Test Commands
+- `npm run compile` – required before running tests so the webpack bundle reflects the latest TypeScript sources.
+- `npm test` – launches the VS Code test runner using the files under `src/test/suite/`.
+- `npm run coverage` – generates an lcov report via `nyc` (optional, slower).
 
-## Core Test Cases
+## Recommended Scenarios
 
-### 1. Tomcat Manager
-```typescript
-// Port validation with delay testing
-test('Port update with delay handling', async () => {
-    jest.useFakeTimers();
-    const tomcat = Tomcat.getInstance();
-    await tomcat.updatePort();
-    jest.advanceTimersByTime(1000);
-    expect(setTimeout).toHaveBeenCalledTimes(1);
-});
+| Area | Suggested Coverage |
+| --- | --- |
+| Tomcat service | Port validation, lifecycle transitions, reload fallbacks |
+| Builder service | Project structure detection, build command selection, smart deploy batching |
+| Browser service | Command construction per platform, reload via CDP |
+| Logger service | Prefix formatting, raw log passthrough, configuration reload |
+| Toolbar service | Visibility toggles when Tomcat starts/stops, smart deploy colouring |
 
-// Improved error logging
-test('Logs detailed port errors', async () => {
-    const loggerSpy = jest.spyOn(Logger.getInstance(), 'error');
-    mockExec.rejects(new Error('Port conflict'));
-    await expect(tomcat.updatePort()).rejects.toThrow();
-    expect(loggerSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Port update failed'));
-});
-```
+## Writing Tests
+- Mock VS Code APIs with `sinon` and update the import paths to `src/services/*`.
+- Use dependency injection where practical (e.g., stub `exec`, `fs`, or `glob`).
+- Keep log assertions tolerant—only assert on prefixes or keywords, not full strings with timestamps.
 
-### 2. Deployment Builder
-```typescript
-// Fast build memory optimization
-test('Uses memory list instead of temp files', async () => {
-    mockGlob.resolves(['file1.java', 'file2.java']);
-    await builder.fastDeploy(projectDir, targetDir, tomcatHome);
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
-});
+## Manual Verification Checklist
+1. `TurboCat: Start` / `TurboCat: Stop` transitions update the toolbar.
+2. Deploying a Maven or Gradle project picks the right build without prompting after the first run.
+3. The **TurboCat** output channel shows prefixed extension messages and raw Tomcat logs.
+4. Smart deploy toggling changes the icon colour immediately.
+5. Browser automation opens or refreshes the configured browser.
 
-// Build duration logging
-test('Logs build completion time', async () => {
-    const loggerSpy = jest.spyOn(Logger.getInstance(), 'info');
-    await builder.deploy('Fast');
-    expect(loggerSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Build completed in'));
-});
-```
-
-### 3. Logger Component
-```typescript
-// Syntax coloring rules
-test('Applies Java syntax coloring', () => {
-    const configSpy = jest.spyOn(vscode.workspace, 'updateConfiguration');
-    addSyntaxColoringRules();
-    expect(configSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-            textMateRules: expect.arrayContaining([
-                expect.objectContaining({
-                    scope: 'entity.name.class.java'
-                })
-            ])
-        })
-    );
-});
-
-// Error message organization
-test('Structures Java compilation errors', () => {
-    const error = new Error('Compilation failure: line 42');
-    logger.error('Build failed', error);
-    expect(outputChannel.appendLine).toHaveBeenCalledWith(
-        expect.stringContaining('line 42'));
-});
-```
-
-## Test Execution
-
-```bash
-# Run specific test suites
-npm test -- --grep 'Builder Tests' --color --parallel=false
-
-# Generate coverage report with Istanbul
-npm run coverage
-
-# Debug tests in VSCode
-F5 -> Select "Extension Tests"
-```
-
-## CI/CD Pipeline
-
-```yaml
-name: CI Pipeline
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with: { node-version: 20.x, cache: npm }
-      - uses: actions/setup-java@v3
-        with: { distribution: 'zulu', java-version: '17' }
-      - run: npm install --legacy-peer-deps
-      - run: npm test -- --grep 'Builder Tests' --color --parallel=false
-        env: { MOCHA_REPORTER: spec, HEADLESS: true }
-
-  cross-platform:
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix: { os: [windows-latest, macos-latest, ubuntu-latest] }
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with: { node-version: 20.x, cache: npm }
-      - run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            sudo apt-get install -y chromium-browser
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install --cask google-chrome
-          fi
-      - run: npm install --legacy-peer-deps
-      - run: npm test -- --grep 'Builder Tests' --color --parallel=false
-        env: { MOCHA_REPORTER: spec, HEADLESS: true }
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with: { node-version: 20.x, cache: npm }
-      - run: npm install --legacy-peer-deps
-      - run: npm run compile
-      - run: vsce package
-      - uses: actions/upload-artifact@v4
-        with: { name: tomcat-extension, path: "*.vsix" }
-```
-
-## Performance Benchmarks
-| Scenario                | Success Criteria | Current Average |
-|-------------------------|------------------|-----------------|
-| Cold Server Start       | <5s              | 3.2s            |
-| Hot Deployment (Fast)   | <800ms           | 720ms           |
-| Full Maven Build        | <5s              | 4.1s            |
-| Browser Session Resume  | <300ms           | 240ms           |
-
-## Security Testing Matrix
-| Test Case               | Method                          | Frequency |
-|-------------------------|---------------------------------|-----------|
-| XSS in Help Panel       | OWASP ZAP Scan                 | Weekly    |
-| Credential Exposure     | Static Code Analysis           | PR Merge  |
-| Path Traversal          | Fuzzing Test (/../../etc/passwd)| Nightly   |
-| DDoS Resilience         | Load Testing (1000 RPM)        | Monthly   |
-
-## End-to-End Test Cases
-
-### 1. Deployment Scenario
-```gherkin
-Feature: Full Deployment Lifecycle
-  Scenario: Maven-based deployment with auto-reload
-    Given a JavaEE project with pom.xml
-    When user saves a .java file
-    Then extension executes "mvn clean package"
-    And deploys WAR to Tomcat/webapps
-    And triggers browser refresh via WebSocket
-    And displays success notification under 5s
-```
-
-### 2. Error Recovery Test
-```typescript
-test('Handle port conflict', async () => {
-  // Force port conflict
-  const testServer = net.createServer();
-  await testServer.listen(8080);
-  
-  await expect(Tomcat.getInstance().start())
-    .rejects.toThrow('Port 8080 in use');
-  
-  // Verify rollback
-  const config = vscode.workspace.getConfiguration();
-  expect(config.get('tomcat.port')).toEqual(8080);
-  
-  await testServer.close();
-});
-```
+Document any gaps or planned test additions so they can be tracked in upcoming iterations.

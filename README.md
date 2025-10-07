@@ -1,151 +1,57 @@
-# TurboCat - Apache Tomcat Extension for VS Code
+# TurboCat – Apache Tomcat Extension for VS Code
 
-**Streamlined Apache Tomcat Development for Visual Studio Code**
+TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and predictable. The extension auto-detects your project layout, applies the right deployment strategy, and exposes one-click server controls with live feedback.
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/Awei.turbocat)](https://marketplace.visualstudio.com/items?itemName=Awei.turbocat)
-[![Downloads](https://img.shields.io/visual-studio-marketplace/d/Awei.turbocat)](https://marketplace.visualstudio.com/items?itemName=Awei.turbocat)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/Awei.turbocat)](https://marketplace.visualstudio.com/items?itemName=Awei.turbocat)
+## Highlights
+- **Lifecycle control** – start, stop, clean, reload, and debug Tomcat from either the command palette or a context-aware status-bar toolbar.
+- **Smart deploy** – dual file-system watchers handle static assets instantly and batch compiled Java class updates. Project type is detected automatically with optional one-time overrides.
+- **Unified logs** – all TurboCat and Tomcat output streams share a single channel, and every extension message is prefixed with `【turbocat】` for quick scanning.
+- **Browser automation** – automatically open or refresh Chrome, Edge, Brave, Opera, Firefox, or Safari after deployment with graceful fallbacks.
+- **Zero guessing** – the extension locates Tomcat and the JDK, validates ports, and keeps workspace settings in sync.
 
-## Overview
+## Installation
+1. Open Visual Studio Code.
+2. Navigate to the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+3. Search for **TurboCat** and click **Install**.
 
-TurboCat simplifies Java web development by providing seamless Apache Tomcat integration directly within Visual Studio Code. Deploy and test your Java web applications with just a few clicks.
+## Daily Workflow
+- `TurboCat: Start` – boots Tomcat (debug mode available via `TurboCat: Start in Debug Mode`).
+- `TurboCat: Deploy` – detects Maven/Gradle/local layouts and executes the matching deployment pipeline without repeated prompts.
+- `TurboCat: Clean` – clears `webapps`, `temp`, and `work` while honouring protected apps.
+- `TurboCat: Reload` – reloads the active context or restarts when necessary.
 
-## Key Features
+The status-bar toolbar hides actions that are not relevant to the current server state. When Tomcat is stopped you only see start/debug/deploy. Once the server is running the toolbar collapses to stop/reload/clean plus the smart deploy toggle. The toggle uses icon colour instead of text to reflect its state.
 
-### Server Management
-- Start and stop Tomcat servers instantly
-- Automatic configuration detection
-- Debug mode support
-- Real-time server status monitoring
+## Configuration Snapshot
+All settings live under the `turbocat.*` namespace. Key options:
 
-### Smart Deployment
-- One-click application deployment
-- Automatic deployment on file save
-- Multiple build strategies (Maven, Gradle)
-- Fast deployment for quick testing
+| Setting | Purpose | Notes |
+| --- | --- | --- |
+| `turbocat.home` / `turbocat.javaHome` | Optional overrides for discovery | Prompted on first launch if left blank |
+| `turbocat.port` / `turbocat.debugPort` | Server & debug ports | Validated and written back to Tomcat configuration |
+| `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
+| `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
+| `turbocat.browser` / `turbocat.autoReloadBrowser` | Browser integration | Uses Chrome DevTools where available |
+| `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
+| `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 
-### Browser Integration
-- Automatic browser launch
-- Support for Chrome, Firefox, Edge, and Safari
-- Live page refresh after deployment
-- Cross-platform compatibility
+## Project Types
+TurboCat autodetects common Java web structures:
 
-### Developer Experience
-- Clear error messages and logging
-- Visual status indicators
-- Command palette integration
-- Configurable settings
+- **Maven** (`pom.xml` with WAR packaging) → runs `mvn clean package`.
+- **Gradle** (`build.gradle` / `.kts`) → runs the `war` task once and reuses the output.
+- **Local / Eclipse-style** (`WebContent`, `src/main/webapp`, or `bin`) → syncs files directly and compiles Java sources with `javac`.
 
-## Getting Started
+When multiple layouts are detected, TurboCat asks for a single confirmation and persists the answer at the workspace level.
 
-### Installation
+## Logging
+- All output goes to a single VS Code Output channel named **TurboCat**.
+- Extension messages are prefixed with `【turbocat】[LEVEL]` and keep optional timestamps.
+- Tomcat logs stream through untouched, including HTTP access logs—no more reformatting.
 
-1. Open Visual Studio Code
-2. Go to Extensions (Ctrl+Shift+X)
-3. Search for "TurboCat"
-4. Click Install
+## Getting Help
+1. Open the **TurboCat** output channel for immediate diagnostics.
+2. Verify `turbocat.home`, `turbocat.javaHome`, and port settings in VS Code.
+3. Check the documentation in `docs/` for architecture, development, and testing guidance.
 
-### Basic Setup
-
-1. Open your Java web project in VS Code
-2. Ensure Apache Tomcat is installed on your system
-3. Configure Tomcat path in settings if needed
-4. Start using TurboCat commands
-
-## Usage
-
-### Quick Commands
-
-Open the Command Palette (Ctrl+Shift+P) and use:
-
-- **Start Tomcat** - Launch your Tomcat server
-- **Deploy Project** - Deploy your application to Tomcat
-- **Stop Tomcat** - Stop the running server
-- **Open in Browser** - View your application
-- **Clean Tomcat** - Clean deployment directory
-
-### Status Bar
-
-TurboCat adds helpful buttons to your VS Code status bar for quick access to common actions.
-
-## Configuration
-
-Access settings through File > Preferences > Settings, then search for "TurboCat":
-
-### Basic Settings
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| Tomcat Home | Path to your Tomcat installation | Auto-detected |
-| Server Port | Port number for Tomcat server | 8080 |
-| Browser | Preferred browser for testing | Chrome |
-| Auto Deploy | Automatically deploy on file save | Enabled |
-
-### Example Configuration
-
-```json
-{
-  "turbocat.tomcatHome": "C:\\apache-tomcat-9.0.65",
-  "turbocat.port": 8080,
-  "turbocat.browser": "chrome",
-  "turbocat.autoDeploy": "Enable"
-}
-```
-
-## Supported Projects
-
-TurboCat works with:
-- Maven web projects
-- Gradle web projects
-- Standard Java EE applications
-- JSP and Servlet applications
-
-## System Requirements
-
-- Visual Studio Code 1.56.0 or newer
-- Apache Tomcat 8.5 or newer
-- Java Development Kit (JDK) 8 or newer
-- Maven or Gradle (for build automation)
-
-## Troubleshooting
-
-### Common Issues
-
-**Server won't start**
-- Check that Tomcat is properly installed
-- Verify the Tomcat Home path in settings
-- Ensure port 8080 is available
-
-**Deployment fails**
-- Confirm your project structure is correct
-- Check that Maven or Gradle is installed
-- Verify Java is properly configured
-
-**Browser doesn't open**
-- Check browser selection in settings
-- Ensure the application deployed successfully
-- Verify the server is running
-
-### Getting Help
-
-If you encounter issues:
-1. Check the Output panel in VS Code for error messages
-2. Review your project structure and configuration
-3. Consult the troubleshooting section above
-4. Submit an issue on our GitHub repository
-
-## Support
-
-For questions, bug reports, or feature requests:
-- GitHub Issues: [Report an Issue](https://github.com/Al-rimi/turbocat/issues)
-- Email Support: awei@sumaho.live
-
-## License
-
-This extension is licensed under the MIT License. See the LICENSE file for details.
-
----
-
-**About the Developer**
-
-TurboCat is developed and maintained by Awei. Visit [sumaho.live](https://www.sumaho.live) for more information about our development tools and
+If an issue persists, gather the output channel contents and file a ticket on the project tracker.

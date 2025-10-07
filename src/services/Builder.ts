@@ -500,6 +500,7 @@ export class Builder {
     private autoDeployMode: 'Disable' | 'Smart';
     private isDeploying = false;
     private attempts = 0;
+    private preferredBuildType: 'Auto' | 'Local' | 'Maven' | 'Gradle';
     
     // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
     private fileWatchers: vscode.FileSystemWatcher[] = []; // Contains both static and compiled file watchers
@@ -519,6 +520,7 @@ export class Builder {
 
     // Configuration file name (legacy, kept for reference)
     private static readonly CONFIG_FILE = '.vscode/tomcat-smart-deploy.json';
+    private static readonly DEPLOY_CANCELLED = 'TurboCat deployment cancelled';
 
     /**
      * Private constructor - initialize configuration and state
@@ -526,6 +528,7 @@ export class Builder {
     private constructor() {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
+        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
     }
 
     /**
@@ -544,6 +547,7 @@ export class Builder {
     public updateConfig(): void {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
+        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
     }
 
     /**
@@ -699,18 +703,21 @@ export class Builder {
             await this.createNewProject();
             return;
         }
-        let isChoice;
 
-        if (type === 'Choice') {
-            isChoice = true;
-            const subAction = vscode.window.showQuickPick(['Local', 'Maven', 'Gradle'], {
-                placeHolder: 'Select build type'
-            });
-            await subAction.then((choice) => {
-                type = (choice as 'Local' | 'Maven' | 'Gradle');
-            });
-            if (!type || type === 'Choice') { return; }
+        let buildType: 'Local' | 'Maven' | 'Gradle';
+        try {
+            buildType = await this.resolveBuildType(type, projectDir);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message !== Builder.DEPLOY_CANCELLED) {
+                logger.error('Deployment aborted:', false, message);
+            } else {
+                logger.info('Deployment cancelled by user');
+            }
+            return;
         }
+
+        logger.info(`Using ${buildType} deployment pipeline`);
 
         const appName = path.basename(projectDir);
         const tomcatHome = await tomcat.findTomcatHome();
@@ -727,20 +734,21 @@ export class Builder {
                 'Local': () => this.localDeploy(projectDir, targetDir, tomcatHome),
                 'Maven': () => this.mavenDeploy(projectDir, targetDir),
                 'Gradle': () => this.gradleDeploy(projectDir, targetDir, appName),
-            }[type];
+            }[buildType];
 
             if (!action) {
-                throw(`Invalid deployment type: ${type}`);
+                throw(`Invalid deployment type: ${buildType}`);
             }
 
             const startTime = performance.now();
 
-            if (isChoice) {
+            const notifyWithProgress = buildType !== 'Local';
+            if (notifyWithProgress) {
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: `${type} Build`,
+                    title: `${buildType} build in progress`,
                     cancellable: false
-                }, action);
+                }, async () => action());
             } else {
                 await action();
             }
@@ -751,7 +759,7 @@ export class Builder {
             const duration = Math.round(endTime - startTime);
 
             if (fs.existsSync(targetDir)) {
-                logger.success(`${type} Build completed in ${duration}ms`, isChoice);
+                logger.success(`${buildType} build completed in ${duration}ms`, notifyWithProgress);
                 await new Promise(resolve => setTimeout(resolve, 100));
                 await tomcat.reload();
             }
@@ -763,14 +771,93 @@ export class Builder {
             if (isBusyError && this.attempts < 3) {
                 this.attempts++;
                 await tomcat.kill();
-                this.deploy(type);
+                this.deploy(buildType);
             } else {
-                logger.error(`${type} Build failed:`, isChoice, err as string);
+                logger.error(`${buildType} build failed:`, true, errorMessage);
             }
             //logger.defaultStatusBar();
         } finally {
             //logger.defaultStatusBar();
         }
+    }
+
+    private async resolveBuildType(
+        requested: 'Local' | 'Maven' | 'Gradle' | 'Choice',
+        projectDir: string
+    ): Promise<'Local' | 'Maven' | 'Gradle'> {
+        if (requested !== 'Choice') {
+            return requested;
+        }
+
+        const candidates = this.collectBuildCandidates(projectDir);
+        const preferred = this.preferredBuildType;
+
+        if (preferred !== 'Auto' && candidates.includes(preferred)) {
+            return preferred;
+        }
+
+        const configuredFallback = vscode.workspace.getConfiguration('turbocat')
+            .get<'Local' | 'Maven' | 'Gradle'>('autoDeployBuildType', 'Local');
+
+        if (preferred === 'Auto' &&
+            configuredFallback &&
+            configuredFallback !== 'Local' &&
+            candidates.includes(configuredFallback)) {
+            await this.persistPreferredBuildType(configuredFallback);
+            return configuredFallback;
+        }
+
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        const choice = await vscode.window.showQuickPick(candidates, {
+            placeHolder: 'Select the build type TurboCat should use for this workspace',
+            ignoreFocusOut: true
+        });
+
+        if (!choice) {
+            throw new Error(Builder.DEPLOY_CANCELLED);
+        }
+
+        const allowed: ReadonlyArray<'Local' | 'Maven' | 'Gradle'> = ['Local', 'Maven', 'Gradle'];
+        if (!allowed.includes(choice as 'Local' | 'Maven' | 'Gradle')) {
+            throw new Error(`Unsupported build type selection: ${choice}`);
+        }
+
+        const typedChoice = choice as 'Local' | 'Maven' | 'Gradle';
+        await this.persistPreferredBuildType(typedChoice);
+        return typedChoice;
+    }
+
+    private collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle'> {
+        const candidates: Array<'Local' | 'Maven' | 'Gradle'> = [];
+        const hasPom = fs.existsSync(path.join(projectDir, 'pom.xml'));
+        const hasGradle = fs.existsSync(path.join(projectDir, 'build.gradle')) ||
+            fs.existsSync(path.join(projectDir, 'build.gradle.kts'));
+
+        if (hasPom) {
+            candidates.push('Maven');
+        }
+
+        if (hasGradle) {
+            candidates.push('Gradle');
+        }
+
+        if (candidates.length === 0) {
+            candidates.push('Local');
+        }
+
+        return candidates;
+    }
+
+    private async persistPreferredBuildType(value: 'Local' | 'Maven' | 'Gradle'): Promise<void> {
+        this.preferredBuildType = value;
+        await vscode.workspace.getConfiguration().update(
+            'turbocat.preferredBuildType',
+            value,
+            vscode.ConfigurationTarget.Workspace
+        );
     }
 
     /**

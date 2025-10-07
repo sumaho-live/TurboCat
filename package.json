@@ -201,7 +201,18 @@
             "Gradle"
           ],
           "default": "Local",
-          "description": "Select the default build type for auto deployment."
+          "description": "Legacy fallback for the smart deploy watcher. Prefer turbocat.preferredBuildType for manual deployments."
+        },
+        "turbocat.preferredBuildType": {
+          "type": "string",
+          "enum": [
+            "Auto",
+            "Local",
+            "Maven",
+            "Gradle"
+          ],
+          "default": "Auto",
+          "description": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, or Gradle to force a specific pipeline."
         },
         "turbocat.browser": {
           "type": "string",

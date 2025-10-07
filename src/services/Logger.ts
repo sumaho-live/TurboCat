@@ -11,8 +11,7 @@ import * as fs from 'fs';
 export class Logger {
     private static instance: Logger;
     private tomcatHome: string;
-    private extensionOutputChannel: vscode.OutputChannel;
-    private tomcatOutputChannel: vscode.OutputChannel;
+    private outputChannel: vscode.OutputChannel;
     private statusBarItem?: vscode.StatusBarItem;
     private currentLogFile: string | null = null;
     private fileCheckInterval?: NodeJS.Timeout;
@@ -47,9 +46,8 @@ export class Logger {
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
         this.autoShowOutput = vscode.workspace.getConfiguration().get<boolean>('turbocat.autoShowOutput', true);
         
-        // Create separate channels for extension and Tomcat logs
-        this.extensionOutputChannel = vscode.window.createOutputChannel('TurboCat', 'log');
-        this.tomcatOutputChannel = vscode.window.createOutputChannel('Tomcat Server', 'log');
+        // Single output channel for all logs
+        this.outputChannel = vscode.window.createOutputChannel('TurboCat', 'log');
         
         this.logEncoding = vscode.workspace.getConfiguration().get<string>('turbocat.logEncoding', 'utf8');
     }
@@ -90,8 +88,7 @@ export class Logger {
      * Clean up all resources and watchers
      */
     public deactivate(): void {
-        this.extensionOutputChannel.dispose();
-        this.tomcatOutputChannel.dispose();
+        this.outputChannel.dispose();
         this.statusBarItem?.dispose();
         if (this.fileCheckInterval) clearInterval(this.fileCheckInterval);
         if (this.unifiedLogWatcher) this.unifiedLogWatcher.close();
@@ -129,14 +126,13 @@ export class Logger {
     }
 
     /** Log error message */
-    public error(message: string, showToast: boolean = false, error: string): void {
-        const fullMessage = error ? `${message}\n${error}` : message;
+    public error(message: string, showToast: boolean = false, error?: Error | string): void {
+        let errorMsg = '';
+        if (error) {
+            errorMsg = typeof error === 'string' ? error : error.stack || error.message;
+        }
+        const fullMessage = errorMsg ? `${message}\n${errorMsg}` : message;
         this.log('ERROR', fullMessage, showToast ? vscode.window.showErrorMessage : undefined);
-    }
-
-    /** Log HTTP request */
-    public http(message: string, showToast: boolean = false): void {
-        this.log('HTTP', message, showToast ? vscode.window.showInformationMessage : undefined);
     }
 
    
@@ -224,25 +220,17 @@ export class Logger {
 
             stream.on('data', data => {
                 data.toString().split('\n').forEach(line => {
-                    if (line.trim()) this.processAccessLogLine(line);
+                    if (line.trim()) {
+                        this.processAccessLogLine(line);
+                    }
                 });
             });
         }
     }
 
-    /** Process and format access log entries */
+    /** Process access log entries without reformatting */
     private processAccessLogLine(rawLine: string) {
-        const cleanedLine = rawLine
-            .replace(/(0:0:0:0:0:0:0:1|127\.0\.0\.1) - -?\s?/g, '')
-            .replace(/\[.*?\]/g, '')
-            .replace(/(HTTP\/1\.1|"+)\s?/g, '')
-            .replace(/"\s?/g, '')
-            .replace(/\s+/g, ' - ')
-            .replace(/^ - | - $/g, '')
-            .replace(/- -/g, '- 200')
-            .trim();
-
-        this.http(cleanedLine, false);
+        this.appendRawLine(rawLine);
     }
 
     /** Check for new log files due to rotation */
@@ -321,20 +309,11 @@ export class Logger {
         stream.on('data', chunk => buffer += chunk);
         stream.on('end', () => {
             let lines = buffer.split('\n').filter(line => line.trim());
-            while (lines.length > 0) {
-                const cleanedLine = lines[lines.length - 1]
-                    .replace(/(0:0:0:0:0:0:0:1|127\.0\.0\.1) - -?\s?/g, '')
-                    .replace(/\[.*?\]/g, '')
-                    .replace(/(HTTP\/1\.1|"+)\s?/g, '')
-                    .replace(/"\s?/g, '')
-                    .replace(/\s+/g, ' - ')
-                    .replace(/^ - | - $/g, '')
-                    .replace(/- -/g, '- 200')
-                    .trim();
-
-                this.http(cleanedLine, false);
-                lines.pop();
-            }
+            lines.forEach((line) => {
+                if (line.trim()) {
+                    this.processAccessLogLine(line);
+                }
+            });
         });
     }
 
@@ -371,7 +350,9 @@ export class Logger {
     ): void {
         const messageLevel = level.toUpperCase();
         const messageLevelValue = this.logLevels[messageLevel] ?? this.logLevels.INFO;
-        if (messageLevelValue < this.logLevels[this.logLevel]) return;
+        if (!isTomcatLog && messageLevelValue < this.logLevels[this.logLevel]) {
+            return;
+        }
 
         let formattedMessage: string;
         
@@ -381,31 +362,24 @@ export class Logger {
         } else {
             // For extension logs, apply standard formatting
             const timestamp = this.showTimestamp ? `[${new Date().toLocaleString()}] ` : '';
-            const levelPrefix = `[${messageLevel}] `;
-            formattedMessage = `${timestamp}${levelPrefix}${message}`;
+            formattedMessage = `${timestamp}【turbocat】[${messageLevel}] ${message}`;
         }
 
         // Determine which output channel to use
-        const outputChannel = isTomcatLog 
-            ? this.tomcatOutputChannel 
-            : this.extensionOutputChannel;
-
-        outputChannel.appendLine(formattedMessage);
+        this.outputChannel.appendLine(formattedMessage);
 
         if (showUI) {
             showUI(message).then(selection => {
                 if (selection) {
-                    this.extensionOutputChannel.appendLine(`User selected: ${selection}`);
+                    const timestamp = this.showTimestamp ? `[${new Date().toLocaleString()}] ` : '';
+                    this.outputChannel.appendLine(`${timestamp}【turbocat】[INFO] User selected: ${selection}`);
                 }
             });
         }
 
         // Only show the output channel automatically if configured to do so
         if (this.autoShowOutput && (['ERROR', 'WARN', 'APP'].includes(messageLevel))) {
-            console.log(`[TurboCat Debug] autoShowOutput: ${this.autoShowOutput}, messageLevel: ${messageLevel}, showing output channel`);
-            outputChannel.show(true);
-        } else {
-            console.log(`[TurboCat Debug] autoShowOutput: ${this.autoShowOutput}, messageLevel: ${messageLevel}, NOT showing output channel`);
+            this.outputChannel.show(true);
         }
     }
 
