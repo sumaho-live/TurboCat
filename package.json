@@ -1,0 +1,292 @@
+{
+  "name": "turbocat",
+  "displayName": "TurboCat",
+  "description": "Fully Automated Support for Apache Tomcat with Enhanced Performance",
+  "version": "0.0.14",
+  "publisher": "Awei",
+  "author": {
+    "email": "awei@sumaho.live",
+    "name": "Awei",
+    "url": "https://www.sumaho.live"
+  },
+  "icon": "resources/tomcat-logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Al-rimi/turbocat"
+  },
+  "bugs": {
+    "url": "https://github.com/Al-rimi/turbocat-extension/issues"
+  },
+  "homepage": "https://github.com/Al-rimi/turbocat#readme",
+  "keywords": [
+    "apache tomcat",
+    "tomcat",
+    "turbocat",
+    "server",
+    "deployment",
+    "javaEE",
+    "java",
+    "jsp",
+    "performance",
+    "vscode"
+  ],
+  "galleryBanner": {
+    "color": "#4A90E2",
+    "theme": "dark"
+  },
+  "categories": [
+    "SCM Providers",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*"
+  ],
+  "engines": {
+    "vscode": "^1.56.0",
+    "node": ">=14.16.0"
+  },
+  "files": [
+    "out/**/*",
+    "syntaxes/**/*",
+    "resources/**/*",
+    "language-configuration.json",
+    "package.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE**"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "turbocat-log",
+        "aliases": [
+          "TurboCat Log"
+        ],
+        "extensions": [
+          ".tlog"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "turbocat-log",
+        "scopeName": "source.turbocat-log",
+        "path": "./syntaxes/turbocat-log.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "turbocat.deploy",
+        "title": "Deploy",
+        "category": "TurboCat",
+        "icon": {
+          "light": "resources/tomcat-icon-light.svg",
+          "dark": "resources/tomcat-icon-dark.svg"
+        }
+      },
+      {
+        "command": "turbocat.start",
+        "title": "TurboCat: Start"
+      },
+      {
+        "command": "turbocat.stop",
+        "title": "TurboCat: Stop"
+      },
+      {
+        "command": "turbocat.clean",
+        "title": "TurboCat: Clean"
+      },
+      {
+        "command": "turbocat.startDebug",
+        "title": "TurboCat: Start in Debug Mode"
+      },
+      {
+        "command": "turbocat.toggleSmartDeploy",
+        "title": "TurboCat: Toggle Smart Deploy"
+      },
+      {
+        "command": "turbocat.debugSmartDeploy",
+        "title": "TurboCat: Debug Smart Deploy Status"
+      },
+      {
+        "command": "turbocat.testCompiledWatcher",
+        "title": "TurboCat: Test Compiled File Watcher"
+      }
+    ],
+    "menus": {
+    },
+    "configuration": {
+      "title": "TurboCat",
+      "properties": {
+        "turbocat.logEncoding": {
+          "type": "string",
+          "default": "utf8",
+          "enum": [
+            "utf8",
+            "ascii",
+            "utf-8",
+            "utf16le",
+            "utf-16le",
+            "ucs2",
+            "ucs-2",
+            "base64",
+            "base64url",
+            "latin1",
+            "binary",
+            "hex"
+          ],
+          "description": "Encoding for Tomcat logs. This setting is used to read the logs and should match the encoding used by Tomcat. If you are unsure, use 'utf8'."
+        },
+        "turbocat.logLevel": {
+          "type": "string",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "SUCCESS",
+            "HTTP",
+            "APP",
+            "WARN",
+            "ERROR"
+          ],
+          "default": "INFO",
+          "description": "Minimum log level to display. Messages at or above this level will be shown."
+        },
+        "turbocat.showTimestamp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to include timestamps in log messages."
+        },
+        "turbocat.autoShowOutput": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to automatically show the output panel when logs are written."
+        },
+        "turbocat.protectedWebApps": {
+          "type": "array",
+          "default": [
+            "ROOT",
+            "docs",
+            "examples",
+            "manager",
+            "host-manager"
+          ],
+          "description": "List of web applications to keep when cleaning Apache Tomcat."
+        },
+        "turbocat.smartDeploy": {
+          "type": "string",
+          "enum": [
+            "Disable",
+            "Smart"
+          ],
+          "default": "Disable",
+          "scope": "machine",
+          "description": "Toggle smart auto-deployment mode. When enabled, only changed files will be automatically deployed."
+        },
+        "turbocat.smartDeployDebounce": {
+          "type": "number",
+          "default": 300,
+          "minimum": 100,
+          "maximum": 60000,
+          "description": "Debounce time in milliseconds for smart deploy to prevent rapid successive deployments."
+        },
+        "turbocat.autoDeployBuildType": {
+          "type": "string",
+          "enum": [
+            "Local",
+            "Maven",
+            "Gradle"
+          ],
+          "default": "Local",
+          "description": "Select the default build type for auto deployment."
+        },
+        "turbocat.browser": {
+          "type": "string",
+          "enum": [
+            "Disable",
+            "Google Chrome",
+            "Microsoft Edge",
+            "Firefox",
+            "Safari",
+            "Brave",
+            "Opera"
+          ],
+          "default": "Google Chrome",
+          "description": "Select your preferred browser to launch the app. Note that Firefox and Safari do not support the Chrome Debug Protocol, and automation is not supported in these browsers."
+        },
+        "turbocat.debugPort": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1024,
+          "maximum": 49151,
+          "errorMessage": "Debug port must be between 1024-49151",
+          "description": "The debug port number for the Tomcat server in debug mode, allowed range is 1024-49151."
+        },
+        "turbocat.port": {
+          "type": "number",
+          "default": 8080,
+          "minimum": 1024,
+          "maximum": 49151,
+          "errorMessage": "Port must be between 1024-49151",
+          "description": "The port number for the Tomcat server, allowed range is 1024-49151."
+        },
+        "turbocat.autoReloadBrowser": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to automatically reload the browser after deployment. Disable this option if having issues with the browser reloading."
+        },
+        "turbocat.home": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "The path to the Apache Tomcat installation. If not set, the extension will try to find the Tomcat installation automatically."
+        },
+        "turbocat.javaHome": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "The path to the JDK installation. If not set, the extension will try to find the JDK automatically."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm install && npm run compile",
+    "package": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext .ts",
+    "test": "node ./node_modules/@vscode/test-electron/out/runTest --extensionDevelopmentPath=. --extensionTestsPath=out/test/suite",
+    "coverage": "nyc --reporter=lcov npm test"
+  },
+  "devDependencies": {
+    "@istanbuljs/nyc-config-typescript": "^1.0.2",
+    "@types/chai": "^5.2.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.17.28",
+    "@types/sinon": "^17.0.4",
+    "@types/vscode": "^1.56.0",
+    "@types/webpack-env": "^1.18.8",
+    "@types/ws": "^8.18.0",
+    "@typescript-eslint/eslint-plugin": "^8.29.0",
+    "@typescript-eslint/parser": "^8.29.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^2.15.0",
+    "chai": "^4.5.0",
+    "eslint": "^9.23.0",
+    "mocha": "^10.4.0",
+    "sinon": "^17.0.1",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.7.3",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "glob": "^11.0.1",
+    "ws": "^7.4.6"
+  }
+}
