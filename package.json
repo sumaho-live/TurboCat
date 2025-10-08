@@ -7,17 +7,17 @@
   "author": {
     "email": "awei@sumaho.live",
     "name": "Awei",
-    "url": "https://www.sumaho.live"
+    "url": "https://github.com/sumaho-lab"
   },
   "icon": "resources/tomcat-logo.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Al-rimi/turbocat"
+    "url": "https://github.com/sumaho-lab/turboCat.git"
   },
   "bugs": {
-    "url": "https://github.com/Al-rimi/turbocat-extension/issues"
+    "url": "https://github.com/sumaho-lab/turboCat/issues"
   },
-  "homepage": "https://github.com/Al-rimi/turbocat#readme",
+  "homepage": "https://github.com/sumaho-lab/turboCat#readme",
   "keywords": [
     "apache tomcat",
     "tomcat",

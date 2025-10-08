@@ -1,0 +1,63 @@
+name: Publish TurboCat Extension
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint checks
+        run: npm run lint
+
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Detect release tag
+        id: release_tag
+        run: |
+          if git tag --points-at HEAD | grep -Fx "release=1"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package VSIX artifact
+        if: steps.release_tag.outputs.publish == 'true'
+        run: npx --yes @vscode/vsce package --no-dependencies
+
+      - name: Upload VSIX artifact
+        if: steps.release_tag.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbocat-extension
+          path: '*.vsix'
+
+      - name: Ensure VSCE_PAT secret is available
+        if: steps.release_tag.outputs.publish == 'true' && (secrets.VSCE_PAT == '' || secrets.VSCE_PAT == null)
+        run: |
+          echo "VSCE_PAT secret is required to publish the extension." >&2
+          exit 1
+
+      - name: Publish to VS Code Marketplace
+        if: steps.release_tag.outputs.publish == 'true' && secrets.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
