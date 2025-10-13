@@ -260,6 +260,12 @@
           "default": "",
           "scope": "machine",
           "description": "The path to the JDK installation. If not set, the extension will try to find the JDK automatically."
+        },
+        "turbocat.tomcatEnvironment": {
+          "type": "object",
+          "default": {},
+          "scope": "machine",
+          "markdownDescription": "Environment variables to apply when launching Tomcat. Use this to add custom JVM parameters, for example:\n```json\n{\n  \"JAVA_TOOL_OPTIONS\": \"-Djava.awt.headless=true\"\n}\n```"
         }
       }
     }
