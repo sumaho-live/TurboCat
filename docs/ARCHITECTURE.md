@@ -11,7 +11,6 @@ src/
 ├─ services/
 │  ├─ Tomcat.ts           # Tomcat lifecycle, configuration, and manager API integration
 │  ├─ Builder.ts          # Deployment orchestration and smart deploy watchers
-│  ├─ Browser.ts          # Browser automation via Chrome DevTools and fallbacks
 │  ├─ Logger.ts           # Unified logging stream and Tomcat log watchers
 │  └─ Toolbar.ts          # Status-bar controls driven by Tomcat state
 └─ utils/
@@ -26,7 +25,7 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 - Discovers and validates Tomcat/JDK locations.
 - Launches, stops, cleans, and reloads the server.
 - Updates `server.xml` on port changes and writes back to workspace settings.
-- Streams Tomcat process output to the logger and triggers browser refresh keywords.
+- Streams Tomcat process output to the logger.
 
 ### Builder Service
 - Detects project structure (Maven / Gradle / local) and remembers explicit overrides.
@@ -38,11 +37,6 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
   - Static resources (`src/**/*`) deploy immediately.
   - Compiled classes (`target/classes`, `build/classes`, etc.) are batched before syncing.
 - Coordinates batch reload decisions and maps file changes to Tomcat destinations.
-
-### Browser Service
-- Launches and reloads browsers with Chrome DevTools (CDP) when available.
-- Falls back to fresh launches and optional process termination prompts.
-- Respects workspace settings for browser preference and auto reload.
 
 ### Logger Service
 - Maintains a single VS Code Output channel (`TurboCat`).

@@ -39,7 +39,6 @@ const sinon = __importStar(require("sinon"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const Builder_1 = require("../../src/utils/Builder");
-const Browser_1 = require("../../src/utils/Browser");
 const Logger_1 = require("../../src/utils/Logger");
 const Tomcat_1 = require("../../src/utils/Tomcat");
 describe('Builder Tests', () => {
@@ -96,8 +95,7 @@ describe('Builder Tests', () => {
             showProgressStub = sandbox.stub(vscode.window, 'withProgress');
             showProgressStub.callsFake((_, task) => task());
             sandbox.stub(Tomcat_1.Tomcat.getInstance(), 'findTomcatHome').resolves('/tomcat');
-            sandbox.stub(Tomcat_1.Tomcat.getInstance(), 'reload').resolves();
-            sandbox.stub(Browser_1.Browser.getInstance(), 'run').resolves();
+        sandbox.stub(Tomcat_1.Tomcat.getInstance(), 'reload').resolves();
         });
         it('should perform Fast deploy', async () => {
             sandbox.stub(fs, 'existsSync').returns(true);

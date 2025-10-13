@@ -8,7 +8,6 @@ import { addSyntaxColoringRules } from '../utils/syntax';
 import { Builder } from '../services/Builder';
 import { Tomcat } from '../services/Tomcat';
 import { Logger } from '../services/Logger';
-import { Browser } from '../services/Browser';
 import { Toolbar } from '../services/Toolbar';
 
 /**
@@ -100,7 +99,6 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
     if (event.affectsConfiguration('turbocat.home')) {
         Tomcat.getInstance().findTomcatHome();
         Builder.getInstance().updateConfig();
-        Browser.getInstance().updateConfig();
         Toolbar.getInstance().updateConfig();
 
     } else if (event.affectsConfiguration('turbocat.javaHome')) {
@@ -129,10 +127,6 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
 
     } else if (event.affectsConfiguration('turbocat.preferredBuildType')) {
         Builder.getInstance().updateConfig();
-
-    } else if (event.affectsConfiguration('turbocat.browser') ||
-        event.affectsConfiguration('turbocat.autoReloadBrowser')) {
-        Browser.getInstance().updateConfig();
 
     } else if (event.affectsConfiguration('turbocat.showTimestamp') ||
         event.affectsConfiguration('turbocat.logLevel') ||

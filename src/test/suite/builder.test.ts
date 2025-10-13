@@ -4,7 +4,6 @@ import * as sinon from 'sinon';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Builder } from '../../utils/Builder';
-import { Browser } from '../../utils/Browser';
 import { Logger } from '../../utils/Logger';
 import { Tomcat } from '../../utils/Tomcat';
 
@@ -73,7 +72,6 @@ describe('Builder Tests', () => {
       
       sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves('/tomcat');
       sandbox.stub(Tomcat.getInstance(), 'reload').resolves();
-      sandbox.stub(Browser.getInstance(), 'run').resolves();
     });
 
     it('should perform Fast deploy', async () => {

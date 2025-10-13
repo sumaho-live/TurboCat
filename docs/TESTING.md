@@ -13,7 +13,6 @@ TurboCat uses the VS Code extension testing harness (Mocha + Chai) that runs aga
 | --- | --- |
 | Tomcat service | Port validation, lifecycle transitions, reload fallbacks |
 | Builder service | Project structure detection, build command selection, smart deploy batching |
-| Browser service | Command construction per platform, reload via CDP |
 | Logger service | Prefix formatting, raw log passthrough, configuration reload |
 | Toolbar service | Visibility toggles when Tomcat starts/stops, smart deploy colouring |
 
@@ -27,6 +26,5 @@ TurboCat uses the VS Code extension testing harness (Mocha + Chai) that runs aga
 2. Deploying a Maven or Gradle project picks the right build without prompting after the first run.
 3. The **TurboCat** output channel shows prefixed extension messages and raw Tomcat logs.
 4. Smart deploy toggling changes the icon colour immediately.
-5. Browser automation opens or refreshes the configured browser.
 
 Document any gaps or planned test additions so they can be tracked in upcoming iterations.

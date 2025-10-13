@@ -2,22 +2,22 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Fully Automated Support for Apache Tomcat with Enhanced Performance",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "publisher": "Awei",
   "author": {
     "email": "awei@sumaho.live",
     "name": "Awei",
-    "url": "https://github.com/sumaho-lab"
+    "url": "https://github.com/sumaho-live/TurboCat"
   },
   "icon": "resources/tomcat-logo.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sumaho-lab/turboCat.git"
+    "url": "https://github.com/sumaho-live/TurboCat.git"
   },
   "bugs": {
-    "url": "https://github.com/sumaho-lab/turboCat/issues"
+    "url": "https://github.com/sumaho-live/TurboCat/issues"
   },
-  "homepage": "https://github.com/sumaho-lab/turboCat#readme",
+  "homepage": "https://github.com/sumaho-live/TurboCat#readme",
   "keywords": [
     "apache tomcat",
     "tomcat",
@@ -214,20 +214,6 @@
           "default": "Auto",
           "description": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, or Gradle to force a specific pipeline."
         },
-        "turbocat.browser": {
-          "type": "string",
-          "enum": [
-            "Disable",
-            "Google Chrome",
-            "Microsoft Edge",
-            "Firefox",
-            "Safari",
-            "Brave",
-            "Opera"
-          ],
-          "default": "Google Chrome",
-          "description": "Select your preferred browser to launch the app. Note that Firefox and Safari do not support the Chrome Debug Protocol, and automation is not supported in these browsers."
-        },
         "turbocat.debugPort": {
           "type": "number",
           "default": 8000,
@@ -243,11 +229,6 @@
           "maximum": 49151,
           "errorMessage": "Port must be between 1024-49151",
           "description": "The port number for the Tomcat server, allowed range is 1024-49151."
-        },
-        "turbocat.autoReloadBrowser": {
-          "type": "boolean",
-          "default": true,
-          "description": "Whether to automatically reload the browser after deployment. Disable this option if having issues with the browser reloading."
         },
         "turbocat.home": {
           "type": "string",
@@ -288,7 +269,6 @@
     "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.56.0",
     "@types/webpack-env": "^1.18.8",
-    "@types/ws": "^8.18.0",
     "@typescript-eslint/eslint-plugin": "^8.29.0",
     "@typescript-eslint/parser": "^8.29.0",
     "@vscode/test-electron": "^2.4.1",
@@ -303,7 +283,6 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "glob": "^11.0.1",
-    "ws": "^7.4.6"
+    "glob": "^11.0.1"
   }
 }

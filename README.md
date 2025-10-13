@@ -6,7 +6,6 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 - **Lifecycle control** – start, stop, clean, reload, and debug Tomcat from either the command palette or a context-aware status-bar toolbar.
 - **Smart deploy** – dual file-system watchers handle static assets instantly and batch compiled Java class updates. Project type is detected automatically with optional one-time overrides.
 - **Unified logs** – all TurboCat and Tomcat output streams share a single channel, and every extension message is prefixed with `【turbocat】` for quick scanning.
-- **Browser automation** – automatically open or refresh Chrome, Edge, Brave, Opera, Firefox, or Safari after deployment with graceful fallbacks.
 - **Zero guessing** – the extension locates Tomcat and the JDK, validates ports, and keeps workspace settings in sync.
 
 ## Installation
@@ -31,7 +30,6 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.port` / `turbocat.debugPort` | Server & debug ports | Validated and written back to Tomcat configuration |
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
-| `turbocat.browser` / `turbocat.autoReloadBrowser` | Browser integration | Uses Chrome DevTools where available |
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 

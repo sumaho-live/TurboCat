@@ -11,7 +11,6 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { Logger } from './Logger';
 import { Buffer } from 'buffer';
-import { Browser } from './Browser';
 import { ChildProcess, spawn } from 'child_process';
 
 const execAsync = promisify(exec);
@@ -556,7 +555,6 @@ export class Tomcat {
                 this.port = newPort;
                 this.updateConfig();
                 Tomcat.getInstance().updateConfig();
-                Browser.getInstance().updateConfig();
 
                 await vscode.workspace.getConfiguration().update('turbocat.port', newPort, true);
                 logger.success(`Tomcat port updated from ${oldPort} to ${newPort}`, true);
@@ -686,7 +684,6 @@ export class Tomcat {
                 const lines = stdoutBuffer.split(/\r?\n/);
                 stdoutBuffer = lines.pop() || '';
                 lines.forEach(line => logger.appendRawLine(line));
-                this.runBrowserOnKeyword(data);
             });
 
             child.stderr.on('data', (data) => {
@@ -694,7 +691,6 @@ export class Tomcat {
                 const lines = stderrBuffer.split(/\r?\n/);
                 stderrBuffer = lines.pop() || '';
                 lines.forEach(line => logger.appendRawLine(line));
-                this.runBrowserOnKeyword(data);
             });
 
             return new Promise((resolve, reject) => {
@@ -720,44 +716,6 @@ export class Tomcat {
         }
     }
     
-    /**
-     * Browser launch keywords
-     * 
-     * Defines keywords for triggering browser launches:
-     * - Server startup messages
-     * - Context reload completion
-     * 
-     * @type {Array<string | RegExp>}
-     */
-    private browserCallKeywords: (string | RegExp)[] = [
-        "Server startup in",
-        "毫秒后服务器启动",
-        /Reloading Context with name \[[^\]]+\] is completed/
-    ];
-
-    /**
-     * Browser run on keywords
-     * 
-     * Handles Tomcat Manager API responses:
-     * - Triggers browser launch on specific keywords
-     * - Supports both exact strings and regex patterns
-     * 
-     * @param data Command output data
-     */
-    private runBrowserOnKeyword(data: string): void {
-        for (const pattern of this.browserCallKeywords) {
-            const isMatch = typeof pattern === 'string'
-                ? data.includes(pattern)
-                : pattern.test(data);
-
-            if (isMatch) {
-                // Make sure we have a valid app name before launching browser
-                const appName = this.currentAppName || this.getAppName();
-                Browser.getInstance().run(appName);
-            }
-        }
-    }
-
     /**
      * Tomcat command construction
      * 

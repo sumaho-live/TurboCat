@@ -26,7 +26,7 @@ Launch the extension host from VS Code (`F5` / "Run Extension") to test changes 
 ```
 src/
 ├─ core/extension.ts      # Activation entry point
-├─ services/              # Singleton services (Tomcat, Builder, Browser, Logger, Toolbar)
+├─ services/              # Singleton services (Tomcat, Builder, Logger, Toolbar)
 ├─ utils/syntax.ts        # Output channel colouring rules
 └─ test/suite/            # Mocha test harness (to be updated alongside service changes)
 docs/                     # Documentation
