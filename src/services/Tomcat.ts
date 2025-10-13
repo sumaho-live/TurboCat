@@ -25,6 +25,7 @@ export class Tomcat {
     private port: number;
     private tomcatProcess: ChildProcess | null = null;
     private currentAppName: string = '';
+    private tomcatEnvironment: Record<string, string>;
 
     private readonly PORT_RANGE = { min: 1024, max: 65535 };
 
@@ -36,6 +37,7 @@ export class Tomcat {
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.protectedWebApps = vscode.workspace.getConfiguration().get<string[]>('turbocat.protectedWebApps', ['ROOT', 'docs', 'examples', 'manager', 'host-manager']);
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
+        this.tomcatEnvironment = this.loadTomcatEnvironment();
     }
 
     /**
@@ -63,6 +65,29 @@ export class Tomcat {
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.protectedWebApps = vscode.workspace.getConfiguration().get<string[]>('turbocat.protectedWebApps', ['ROOT', 'docs', 'examples', 'manager', 'host-manager']);
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
+        this.tomcatEnvironment = this.loadTomcatEnvironment();
+    }
+
+    private loadTomcatEnvironment(): Record<string, string> {
+        const configured = vscode.workspace.getConfiguration().get<Record<string, unknown>>('turbocat.tomcatEnvironment', {});
+        if (!configured || typeof configured !== 'object') {
+            return {};
+        }
+
+        const environment: Record<string, string> = {};
+        for (const [key, value] of Object.entries(configured)) {
+            if (!key) {
+                continue;
+            }
+
+            if (typeof value === 'string') {
+                environment[key] = value;
+            } else if (value !== undefined && value !== null) {
+                environment[key] = String(value);
+            }
+        }
+
+        return environment;
     }
 
     /** Set application name for deployment */
@@ -642,7 +667,11 @@ export class Tomcat {
 
             const child = spawn(command, args, {
                 stdio: 'pipe',
-                shell: process.platform === 'win32'
+                shell: process.platform === 'win32',
+                env: {
+                    ...process.env,
+                    ...this.tomcatEnvironment
+                }
             });
             this.tomcatProcess = child;
 
@@ -682,7 +711,12 @@ export class Tomcat {
         } else {
             const { command, args } = this.buildCommand(action, tomcatHome, javaHome);
             const stopCommand = [command, ...args].join(' ');
-            await execAsync(stopCommand);
+            await execAsync(stopCommand, {
+                env: {
+                    ...process.env,
+                    ...this.tomcatEnvironment
+                }
+            });
         }
     }
     
