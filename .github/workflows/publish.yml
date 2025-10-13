@@ -11,6 +11,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -51,13 +53,11 @@ jobs:
           path: '*.vsix'
 
       - name: Ensure VSCE_PAT secret is available
-        if: steps.release_tag.outputs.publish == 'true' && (secrets.VSCE_PAT == '' || secrets.VSCE_PAT == null)
+        if: steps.release_tag.outputs.publish == 'true' && (env.VSCE_PAT == '' || env.VSCE_PAT == null)
         run: |
           echo "VSCE_PAT secret is required to publish the extension." >&2
           exit 1
 
       - name: Publish to VS Code Marketplace
-        if: steps.release_tag.outputs.publish == 'true' && secrets.VSCE_PAT != ''
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: steps.release_tag.outputs.publish == 'true' && env.VSCE_PAT != ''
         run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
