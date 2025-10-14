@@ -20,7 +20,7 @@ export class Toolbar {
     private smartDeployButton: vscode.StatusBarItem;
     
     // State tracking
-    private isServerRunning: boolean = false;
+    private isServerRunning: boolean | null = null;
     private isSmartDeployEnabled: boolean = false;
     private updateInterval: NodeJS.Timeout | null = null;
 
@@ -80,8 +80,14 @@ export class Toolbar {
      * Shows buttons and starts status polling
      */
     public init(): void {
-        // Show all buttons initially
-        this.showAllButtons();
+        // Show default button state (server assumed stopped until ping)
+        this.startButton.show();
+        this.debugButton.show();
+        this.deployButton.show();
+        this.cleanButton.show();
+        this.smartDeployButton.show();
+        this.stopButton.hide();
+        this.reloadButton.hide();
         
         // Start polling for server status
         this.updateServerStatus();
@@ -110,14 +116,14 @@ export class Toolbar {
         const smartDeploy = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy', 'Disable');
         this.isSmartDeployEnabled = smartDeploy === 'Smart';
         
-        this.smartDeployButton.text = "$(zap)";
-        
         if (this.isSmartDeployEnabled) {
-            this.smartDeployButton.tooltip = "Smart Deploy is enabled - Click to disable";
+            this.smartDeployButton.text = "$(zap) ON";
+            this.smartDeployButton.tooltip = "Smart Deploy is enabled - click to disable automatic deployments";
             this.smartDeployButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
             this.smartDeployButton.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
         } else {
-            this.smartDeployButton.tooltip = "Smart Deploy is disabled - Click to enable";
+            this.smartDeployButton.text = "$(zap) OFF";
+            this.smartDeployButton.tooltip = "Smart Deploy is disabled - click to enable automatic deployments";
             this.smartDeployButton.backgroundColor = undefined;
             this.smartDeployButton.color = new vscode.ThemeColor('statusBarItem.inactiveForeground');
         }
