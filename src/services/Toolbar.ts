@@ -132,19 +132,6 @@ export class Toolbar {
     }
     
     /**
-     * Show all toolbar buttons
-     */
-    private showAllButtons(): void {
-        this.startButton.show();
-        this.stopButton.show();
-        this.reloadButton.show();
-        this.deployButton.show();
-        this.cleanButton.show();
-        this.debugButton.show();
-        this.smartDeployButton.show();
-    }
-
-    /**
      * Update button visibility and icons based on current server status
      */
     private async updateServerStatus(): Promise<void> {
