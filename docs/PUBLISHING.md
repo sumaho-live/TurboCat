@@ -29,11 +29,9 @@ This guide explains how to register for the Visual Studio Code Marketplace and p
 
 ## 6. Triggering a release
 1. Push your changes to the `main` branch.
-2. Tag the commit with `release=1` (for example: `git tag release=1 && git push origin main --tags`).
-3. The GitHub Actions workflow will compile the extension, package a `.vsix` artifact, and publish it to the Marketplace when the `release=1` tag points to the latest `main` commit.
+2. The GitHub Actions workflow will compile the extension, package a `.vsix` artifact, and publish it to the Marketplace if the `VSCE_PAT` secret is configured.
 
 ## Troubleshooting tips
 - Ensure the `publisher` in `package.json` matches the Marketplace publisher ID exactly.
 - The PAT must be active and scoped to **Marketplace (Manage)**. Expired tokens cause a 401 error during publishing.
-- Remove the `release=1` tag after publishing if you want to trigger another release later; reusing the same tag requires deleting it locally and remotely before re-creating it.
 - To test packaging locally without publishing, run `npm run compile` followed by `npx @vscode/vsce package`.
