@@ -10,7 +10,6 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { Logger } from './Logger';
-import { Buffer } from 'buffer';
 import { ChildProcess, spawn } from 'child_process';
 
 const execAsync = promisify(exec);
@@ -20,11 +19,11 @@ export class Tomcat {
     private static instance: Tomcat;
     private tomcatHome: string;
     private javaHome: string;
-    private protectedWebApps: string[];
     private port: number;
     private tomcatProcess: ChildProcess | null = null;
     private currentAppName: string = '';
     private tomcatEnvironment: Record<string, string>;
+    private lastStartMode: 'run' | 'debug';
 
     private readonly PORT_RANGE = { min: 1024, max: 65535 };
 
@@ -34,9 +33,9 @@ export class Tomcat {
     private constructor() {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
-        this.protectedWebApps = vscode.workspace.getConfiguration().get<string[]>('turbocat.protectedWebApps', ['ROOT', 'docs', 'examples', 'manager', 'host-manager']);
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
+        this.lastStartMode = 'run';
     }
 
     /**
@@ -62,7 +61,6 @@ export class Tomcat {
     public updateConfig(): void {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
-        this.protectedWebApps = vscode.workspace.getConfiguration().get<string[]>('turbocat.protectedWebApps', ['ROOT', 'docs', 'examples', 'manager', 'host-manager']);
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
     }
@@ -125,6 +123,7 @@ export class Tomcat {
         await this.ensureTomcatStopped(showMessages);
 
         try {
+            this.lastStartMode = 'run';
             this.executeTomcatCommand('start', tomcatHome, javaHome);
             if (showMessages) {
                 logger.info('Tomcat started successfully', showMessages);
@@ -147,6 +146,7 @@ export class Tomcat {
 
         try {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
+            this.lastStartMode = 'debug';
             this.executeTomcatCommand('start', tomcatHome, javaHome, {
                 debug: true,
                 debugPort
@@ -198,68 +198,53 @@ export class Tomcat {
     /**
      * Application hot-reload handler
      * 
-     * Implements zero-downtime application reload:
-     * 1. Detects current server state
-     * 2. Uses Tomcat Manager API for reload
-     * 3. Falls back to full restart if needed
-     * 4. Maintains session persistence
-     * 5. Handles authentication requirements
+     * Performs a controlled restart that preserves the previous run mode:
+     * 1. Detects whether Tomcat is currently running
+     * 2. Records if the last launch was in debug mode
+     * 3. Stops the running instance gracefully
+     * 4. Restarts Tomcat in the same mode (debug or standard)
      * 
      * @log Error if reload fails with diagnostic information
      */
     public async reload(): Promise<void> {
-        const tomcatHome = await this.findTomcatHome();
-        const javaHome = await this.findJavaHome();
+        if (!await this.findTomcatHome() || !await this.findJavaHome()) { return; }
 
-        if (!tomcatHome || !javaHome) { return; }
+        const wasDebugMode = this.lastStartMode === 'debug';
+        const wasRunning = await this.isTomcatRunning();
 
-        // If Tomcat is not running, start it
-        if (!await this.isTomcatRunning()) {
-            logger.info("Tomcat is not running, starting it...");
-            await this.start(true);
+        if (!wasRunning) {
+            logger.info('Tomcat is not running, starting it...');
+            if (wasDebugMode) {
+                await this.startDebug(true);
+            } else {
+                await this.start(true);
+            }
             return;
         }
 
         try {
-            // Use currentAppName if set, otherwise get it from workspace
-            const appName = this.currentAppName || this.getAppName();
-            if (!appName) { 
-                logger.error('No application name provided', true, 'Please provide a valid application name');
-                return; 
-            }
+            await this.ensureTomcatStopped(true);
+            logger.clearOutput();
 
-            const response = await fetch(`http://localhost:${this.port}/manager/text/reload?path=/${encodeURIComponent(appName)}`, {
-                headers: {
-                    'Authorization': `Basic ${Buffer.from('admin:admin').toString('base64')}`
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`Reload failed: ${await response.text()}`);
+            if (wasDebugMode) {
+                await this.startDebug(false);
+                logger.success('Tomcat reloaded in debug mode');
+            } else {
+                await this.start(false);
+                logger.success('Tomcat reloaded');
             }
-            logger.success('Tomcat reloaded');
         } catch (err) {
-            logger.warn('Reload via manager API failed, attempting restart...', true);
-            try {
-                // Ensure Tomcat is stopped before restarting
-                await this.ensureTomcatStopped(true);
-                // Start Tomcat again
-                await this.start(true);
-            } catch (restartErr) {
-                logger.warn('Reload via restart failed, attempting to add admin user...', true);
-                await this.addTomcatUser(tomcatHome);
-            }
+            logger.error('Failed to reload Tomcat:', true, err as string);
         }
     }
 
     /**
      * Server maintenance and cleanup
      * 
-     * Performs comprehensive server cleanup:
-     * 1. Webapp directory cleaning with exclusions
-     * 2. Work directory purging
-     * 3. Temp file removal
-     * 4. Resource leak prevention
+     * Removes only the currently tracked web application artifacts:
+     * 1. Deletes the deployed webapp directory under webapps/
+     * 2. Clears the matching work/ cache folder
+     * 3. Removes temp files that belong to the same context
      * 
      * @log Error if cleanup fails with filesystem details
      */
@@ -268,50 +253,38 @@ export class Tomcat {
         const javaHome = await this.findJavaHome();
         if (!tomcatHome || !javaHome) { return; }
 
-        const webappsDir = path.join(tomcatHome, 'webapps');
-
-        if (!fs.existsSync(webappsDir)) {
-            logger.warn(`Webapps directory not found: ${webappsDir}`);
-            return;
-        }
-
         try {
-            // Ensure Tomcat is stopped before cleaning
-            await this.ensureTomcatStopped(true);
-            
-            const entries = fs.readdirSync(webappsDir, { withFileTypes: true });
-
-            for (const entry of entries) {
-                const entryPath = path.join(webappsDir, entry.name);
-
-                if (!this.protectedWebApps.includes(entry.name)) {
-                    try {
-                        if (entry.isDirectory()) {
-                            fs.rmSync(entryPath, { recursive: true, force: true });
-                            logger.info(`Removed directory: ${entryPath}`);
-                        } else if (entry.isFile() || entry.isSymbolicLink()) {
-                            fs.unlinkSync(entryPath);
-                            logger.info(`Removed file: ${entryPath}`);
-                        }
-                    } catch (err) {
-                        throw err;
-                    }
-                }
+            const appName = this.currentAppName || this.getAppName();
+            if (!appName) {
+                logger.error('No application name provided', true, 'Please provide a valid application name');
+                return;
             }
 
-            const workDir = path.join(tomcatHome, 'work');
-            const tempDir = path.join(tomcatHome, 'temp');
-            [workDir, tempDir].forEach(dir => {
-                if (fs.existsSync(dir)) {
-                    try {
-                        fs.rmSync(dir, { recursive: true, force: true });
-                        fs.mkdirSync(dir);
-                        logger.info(`Cleaned and recreated: ${dir}`);
-                    } catch (err) {
-                        throw err;
-                    }
-                }
-            });
+            // Ensure Tomcat is stopped before cleaning
+            await this.ensureTomcatStopped(true);
+
+            const appDir = path.join(tomcatHome, 'webapps', appName);
+
+            if (!fs.existsSync(appDir)) {
+                logger.warn(`Webapp directory not found: ${appDir}`);
+                return;
+            }
+
+            fs.rmSync(appDir, { recursive: true, force: true });
+            logger.info(`Removed directory: ${appDir}`);
+
+            const workDir = path.join(tomcatHome, 'work', appName);
+            if (fs.existsSync(workDir)) {
+                fs.rmSync(workDir, { recursive: true, force: true });
+                logger.info(`Cleaned work directory: ${workDir}`);
+            }
+
+            const tempDir = path.join(tomcatHome, 'temp', appName);
+            if (fs.existsSync(tempDir)) {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                fs.mkdirSync(tempDir, { recursive: true });
+                logger.info(`Cleaned temp directory: ${tempDir}`);
+            }
 
             logger.success('Tomcat cleaned successfully', true);
         } catch (err) {
@@ -761,39 +734,6 @@ export class Tomcat {
             command: javaExecutable,
             args
         };
-    }
-
-    /**
-     * User management
-     * 
-     * Handles tomcat-users.xml modifications:
-     * - Admin user creation
-     * - Role assignment
-     * - File permission handling
-     * - XML structure preservation
-     * 
-     * @param tomcatHome Tomcat installation directory
-     */
-    private async addTomcatUser(tomcatHome: string): Promise<void> {
-        const usersXmlPath = path.join(tomcatHome, 'conf', 'tomcat-users.xml');
-
-        try {
-            // Ensure Tomcat is stopped before modifying user configuration
-            await this.ensureTomcatStopped(true);
-            
-            let content = await fsp.readFile(usersXmlPath, 'utf8');
-            const newUser = '<user username="admin" password="admin" roles="manager-gui,manager-script"/>';
-
-            content = content
-                .replace(/<user username="admin".*\/>/g, '')
-                .replace(/(<\/tomcat-users>)/, `  ${newUser}\n$1`);
-
-            await fsp.writeFile(usersXmlPath, content);
-            logger.info('Added admin user to tomcat-users.xml');
-            this.start();
-        } catch (err) {
-            return;
-        }
     }
 
     /**

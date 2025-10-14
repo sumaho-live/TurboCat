@@ -165,17 +165,6 @@
           "default": true,
           "description": "Whether to automatically show the output panel when logs are written."
         },
-        "turbocat.protectedWebApps": {
-          "type": "array",
-          "default": [
-            "ROOT",
-            "docs",
-            "examples",
-            "manager",
-            "host-manager"
-          ],
-          "description": "List of web applications to keep when cleaning Apache Tomcat."
-        },
         "turbocat.smartDeploy": {
           "type": "string",
           "enum": [

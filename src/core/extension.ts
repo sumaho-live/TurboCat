@@ -107,7 +107,6 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         Toolbar.getInstance().updateConfig();
 
     } else if (event.affectsConfiguration('turbocat.port') || 
-        event.affectsConfiguration('turbocat.protectedWebApps') ||
         event.affectsConfiguration('turbocat.debugPort')) {
         Tomcat.getInstance().updateConfig();
         Tomcat.getInstance().updatePort();

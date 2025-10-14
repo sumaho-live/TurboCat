@@ -150,6 +150,13 @@ export class Logger {
     }
 
     /**
+     * Clear the output channel so the next server run shows fresh logs
+     */
+    public clearOutput(): void {
+        this.outputChannel.clear();
+    }
+
+    /**
      * Append raw Tomcat log line to output channel
      */
     public appendRawLine(message: string): void {

@@ -16,7 +16,7 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 ## Daily Workflow
 - `TurboCat: Start` – boots Tomcat (debug mode available via `TurboCat: Start in Debug Mode`).
 - `TurboCat: Deploy` – detects Maven/Gradle/local layouts and executes the matching deployment pipeline without repeated prompts.
-- `TurboCat: Clean` – clears `webapps`, `temp`, and `work` while honouring protected apps.
+- `TurboCat: Clean` – removes the active webapp deployment and its cached work/temp artifacts.
 - `TurboCat: Reload` – reloads the active context or restarts when necessary.
 
 The status-bar toolbar hides actions that are not relevant to the current server state. When Tomcat is stopped you only see start/debug/deploy. Once the server is running the toolbar collapses to stop/reload/clean plus the smart deploy toggle. The toggle uses icon colour instead of text to reflect its state.
