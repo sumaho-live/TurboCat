@@ -124,7 +124,7 @@ export class Tomcat {
 
         try {
             this.lastStartMode = 'run';
-            this.executeTomcatCommand('start', tomcatHome, javaHome);
+            await this.executeTomcatCommand('start', tomcatHome, javaHome);
             if (showMessages) {
                 logger.info('Tomcat started successfully', showMessages);
             }
@@ -147,7 +147,7 @@ export class Tomcat {
         try {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
             this.lastStartMode = 'debug';
-            this.executeTomcatCommand('start', tomcatHome, javaHome, {
+            await this.executeTomcatCommand('start', tomcatHome, javaHome, {
                 debug: true,
                 debugPort
             });
