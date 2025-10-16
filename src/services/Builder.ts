@@ -501,6 +501,7 @@ export class Builder {
     private isDeploying = false;
     private attempts = 0;
     private preferredBuildType: 'Auto' | 'Local' | 'Maven' | 'Gradle';
+    private syncBypassPatterns: RegExp[] = [];
     
     // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
     private fileWatchers: vscode.FileSystemWatcher[] = []; // Contains both static and compiled file watchers
@@ -529,6 +530,7 @@ export class Builder {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
+        this.loadSyncBypassPatterns();
     }
 
     /**
@@ -548,6 +550,21 @@ export class Builder {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
+        this.loadSyncBypassPatterns();
+    }
+
+    /**
+     * Load filename bypass patterns for smart deploy synchronization
+     */
+    private loadSyncBypassPatterns(): void {
+        const raw = vscode.workspace.getConfiguration('turbocat').get<string>('syncBypassPatterns', 'copy,副本,コピー,копия') || '';
+        const patterns = raw.split(',')
+            .map(pattern => pattern.trim())
+            .filter(Boolean)
+            .map(pattern => new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+
+        this.syncBypassPatterns = patterns;
+        logger.debug(`Sync bypass patterns: ${patterns.map(regex => regex.source).join(', ') || 'none'}`);
     }
 
     /**
@@ -1056,6 +1073,11 @@ export class Builder {
         const fileName = path.basename(uri.fsPath);
         const fileExt = path.extname(uri.fsPath).toLowerCase();
         
+        if (this.shouldBypassFile(uri.fsPath)) {
+            logger.debug(`Bypassing sync for file: ${fileName}`);
+            return;
+        }
+        
         // Skip hidden files, temp files, and handle Java files specially
         if (fileName.startsWith('.') || fileName.endsWith('.tmp') || fileName.endsWith('.temp') || fileExt === '.svn') {
             logger.debug(`Skipping file: ${fileName} (temp/hidden file)`);
@@ -1470,6 +1492,11 @@ export class Builder {
         const fileName = path.basename(uri.fsPath);
         const fileExt = path.extname(uri.fsPath).toLowerCase();
         
+        if (this.shouldBypassFile(uri.fsPath)) {
+            logger.debug(`Bypassing sync for compiled file: ${fileName}`);
+            return;
+        }
+        
         // Only process .class files
         if (fileExt !== '.class') {
             logger.debug(`Skipping non-class file: ${fileName}`);
@@ -1485,6 +1512,18 @@ export class Builder {
         
         // Use batch deployment for compiled files
         this.addToBatchDeployment(uri.fsPath, eventType);
+    }
+
+    /**
+     * Determine whether a file should be bypassed from synchronization
+     */
+    private shouldBypassFile(filePath: string): boolean {
+        if (!this.syncBypassPatterns.length) {
+            return false;
+        }
+
+        const baseName = path.basename(filePath);
+        return this.syncBypassPatterns.some(pattern => pattern.test(baseName));
     }
 
     // LEGACY: Old deployment methods (commented out for new dual-watcher architecture)

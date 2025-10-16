@@ -9,6 +9,7 @@ import { Builder } from '../services/Builder';
 import { Tomcat } from '../services/Tomcat';
 import { Logger } from '../services/Logger';
 import { Toolbar } from '../services/Toolbar';
+import { DebugProfile } from '../services/DebugProfile';
 
 /**
  * Extension activation - initializes services and registers commands
@@ -51,6 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Debug commands for troubleshooting smart deployment
         vscode.commands.registerCommand('turbocat.debugSmartDeploy', () => builder.debugSmartDeploymentStatus()),
         vscode.commands.registerCommand('turbocat.testCompiledWatcher', () => builder.testCompiledFileWatcher()),
+        vscode.commands.registerCommand('turbocat.generateDebugProfile', () => DebugProfile.getInstance().generateJavaAttachProfile()),
 
         // Configuration change listener with efficient filtering
         vscode.workspace.onDidChangeConfiguration(async (event) => {
@@ -124,7 +126,8 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
     } else if (event.affectsConfiguration('turbocat.tomcatEnvironment')) {
         Tomcat.getInstance().updateConfig();
 
-    } else if (event.affectsConfiguration('turbocat.preferredBuildType')) {
+    } else if (event.affectsConfiguration('turbocat.preferredBuildType') ||
+        event.affectsConfiguration('turbocat.syncBypassPatterns')) {
         Builder.getInstance().updateConfig();
 
     } else if (event.affectsConfiguration('turbocat.showTimestamp') ||

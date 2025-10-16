@@ -1,8 +1,8 @@
 {
   "name": "turbocat",
   "displayName": "TurboCat",
-  "description": "Fully Automated Support for Apache Tomcat with Enhanced Performance",
-  "version": "0.0.17",
+  "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
+  "version": "0.0.18",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -27,7 +27,8 @@
     "javaEE",
     "java",
     "jsp",
-    "performance",
+    "synchronization",
+    "automation",
     "vscode"
   ],
   "galleryBanner": {
@@ -115,6 +116,10 @@
       {
         "command": "turbocat.testCompiledWatcher",
         "title": "TurboCat: Test Compiled File Watcher"
+      },
+      {
+        "command": "turbocat.generateDebugProfile",
+        "title": "TurboCat: Generate Java Debug Profile"
       }
     ],
     "menus": {
@@ -164,6 +169,11 @@
           "type": "boolean",
           "default": true,
           "description": "Whether to automatically show the output panel when logs are written."
+        },
+        "turbocat.syncBypassPatterns": {
+          "type": "string",
+          "default": "copy,副本,コピー,копия",
+          "description": "Comma-separated keywords; files containing these terms in the name are ignored by smart deploy synchronization (case-insensitive)."
         },
         "turbocat.smartDeploy": {
           "type": "string",

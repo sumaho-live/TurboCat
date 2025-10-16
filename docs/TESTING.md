@@ -15,6 +15,7 @@ TurboCat uses the VS Code extension testing harness (Mocha + Chai) that runs aga
 | Builder service | Project structure detection, build command selection, smart deploy batching |
 | Logger service | Prefix formatting, raw log passthrough, configuration reload |
 | Toolbar service | Visibility toggles when Tomcat starts/stops, smart deploy colouring |
+| DebugProfile service | Launch.json generation, port updates, error handling when JSON is invalid |
 
 ## Writing Tests
 - Mock VS Code APIs with `sinon` and update the import paths to `src/services/*`.
@@ -25,6 +26,7 @@ TurboCat uses the VS Code extension testing harness (Mocha + Chai) that runs aga
 1. `TurboCat: Start` / `TurboCat: Stop` transitions update the toolbar.
 2. Deploying a Maven or Gradle project picks the right build without prompting after the first run.
 3. The **TurboCat** output channel shows prefixed extension messages and raw Tomcat logs.
-4. Smart deploy toggling changes the icon colour immediately.
+4. Smart deploy toggling reflects the correct label (`Smart Deploy` / `Smart Deploy (Off)`).
+5. `TurboCat: Generate Java Debug Profile` creates or updates `.vscode/launch.json` with the configured debug port.
 
 Document any gaps or planned test additions so they can be tracked in upcoming iterations.

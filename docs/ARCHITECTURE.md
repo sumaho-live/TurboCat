@@ -12,7 +12,8 @@ src/
 │  ├─ Tomcat.ts           # Tomcat lifecycle, configuration, and manager API integration
 │  ├─ Builder.ts          # Deployment orchestration and smart deploy watchers
 │  ├─ Logger.ts           # Unified logging stream and Tomcat log watchers
-│  └─ Toolbar.ts          # Status-bar controls driven by Tomcat state
+│  ├─ Toolbar.ts          # Status-bar controls driven by Tomcat state
+│  └─ DebugProfile.ts     # Guided generation of VS Code launch configurations
 └─ utils/
    └─ syntax.ts           # Output channel syntax colouring rules
 ```
@@ -47,8 +48,13 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 ### Toolbar Service
 - Creates status-bar buttons for start/stop/debug/deploy/reload/clean/smart deploy.
 - Polls the Tomcat service to determine which buttons should be visible at any moment.
-- Colours the smart deploy button instead of relying on textual `ON/OFF` labels.
+- Shows explicit `Smart Deploy` / `Smart Deploy (Off)` states for clarity.
 - Disposes resources cleanly on deactivation.
+
+### DebugProfile Service
+- Generates or updates `.vscode/launch.json` with a Java attach configuration.
+- Aligns the attach port with the current `turbocat.debugPort` setting.
+- Opens the resulting file on demand so developers can review or tweak settings.
 
 ## Activation Flow
 1. `activate()` instantiates the services and registers commands.
