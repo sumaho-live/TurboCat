@@ -667,9 +667,13 @@ export class Tomcat {
             });
 
             return new Promise((resolve, reject) => {
-                child.on('close', (code) => {
+                child.on('close', (code, signal) => {
                     this.tomcatProcess = null;
-                    code === 0 ? resolve() : reject(new Error(`Start failed with code ${code}`));
+                    if (code === 0 || code === 143 || signal === 'SIGTERM') {
+                        resolve();
+                    } else {
+                        reject(new Error(`Start failed with code ${code}`));
+                    }
                 });
 
                 child.on('error', (err) => {

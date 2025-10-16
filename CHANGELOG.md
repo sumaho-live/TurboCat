@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.19]
+- Treated Tomcat start exit code 143 (or SIGTERM signal) as successful during reloads, preventing spurious “Start failed” errors after a restart.
+
 ## [0.0.18]
 - Added the `TurboCat: Generate Java Debug Profile` command to scaffold or refresh `.vscode/launch.json` with the correct attach settings.
 - Introduced the `turbocat.syncBypassPatterns` setting so copied/duplicate files (e.g., containing “copy” or “副本”) are ignored during smart synchronization.
