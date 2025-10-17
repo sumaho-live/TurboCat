@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -145,6 +145,11 @@
             "hex"
           ],
           "description": "Encoding for Tomcat logs. This setting is used to read the logs and should match the encoding used by Tomcat. If you are unsure, use 'utf8'."
+        },
+        "turbocat.compileEncoding": {
+          "type": "string",
+          "default": "UTF-8",
+          "description": "Encoding passed to javac during Local deployments. Set this to match your source file encoding when compiling without Maven or Gradle."
         },
         "turbocat.logLevel": {
           "type": "string",

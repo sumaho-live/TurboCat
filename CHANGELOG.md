@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.22]
+- Added the `turbocat.compileEncoding` setting to control the `javac` `-encoding` value during Local deployments (defaults to UTF-8 for cross-platform builds).
+
 ## [0.0.21]
 - Prevented `spawn ENAMETOOLONG` errors during Local deployment by invoking `javac` with a generated args file, enabling large Eclipse projects to compile reliably.
 

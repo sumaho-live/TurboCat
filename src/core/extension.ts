@@ -144,5 +144,7 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
             vscode.workspace.getConfiguration().update('turbocat.logEncoding', 'utf8', true);
         }
         Logger.getInstance().updateConfig();
+    } else if (event.affectsConfiguration('turbocat.compileEncoding')) {
+        Builder.getInstance().updateConfig();
     }
 }

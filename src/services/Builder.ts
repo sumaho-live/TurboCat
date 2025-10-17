@@ -516,6 +516,7 @@ export class Builder {
     private projectStructure?: ProjectStructure;
     private smartDeployConfig?: SmartDeployConfig;
     private compiledMappings?: CompiledMapping[];
+    private compileEncoding: string;
 
     // Legacy code (commented out for new implementation)
     // private deployDebouncer = new Map<string, NodeJS.Timeout>();
@@ -532,6 +533,7 @@ export class Builder {
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
         this.loadSyncBypassPatterns();
+        this.compileEncoding = this.resolveCompileEncoding();
     }
 
     /**
@@ -552,6 +554,7 @@ export class Builder {
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
         this.loadSyncBypassPatterns();
+        this.compileEncoding = this.resolveCompileEncoding();
     }
 
     /**
@@ -566,6 +569,25 @@ export class Builder {
 
         this.syncBypassPatterns = patterns;
         logger.debug(`Sync bypass patterns: ${patterns.map(regex => regex.source).join(', ') || 'none'}`);
+    }
+
+    /**
+     * Resolve the javac encoding flag from user configuration with basic validation.
+     */
+    private resolveCompileEncoding(): string {
+        const configured = vscode.workspace.getConfiguration('turbocat').get<string>('compileEncoding', 'UTF-8') || 'UTF-8';
+        const value = configured.trim();
+        if (!value) {
+            return 'UTF-8';
+        }
+
+        const isSafe = /^[\w.\-]+$/i.test(value);
+        if (!isSafe) {
+            logger.warn(`Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`);
+            return 'UTF-8';
+        }
+
+        return value;
     }
 
     /**
@@ -2028,7 +2050,8 @@ export class Builder {
 
             fs.writeFileSync(argsFile, argsFileContent, 'utf8');
 
-            const cmd = `${escapeForCmd(javacPath)} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(tomcatLibs)} @${escapeForCmd(argsFile)}`;
+            const encodingArg = this.compileEncoding ? ` -encoding ${escapeForCmd(this.compileEncoding)}` : '';
+            const cmd = `${escapeForCmd(javacPath)}${encodingArg} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(tomcatLibs)} @${escapeForCmd(argsFile)}`;
 
             try {
                 await this.executeCommand(cmd, projectDir);
