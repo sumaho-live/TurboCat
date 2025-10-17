@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { exec } from 'child_process';
 import { env } from 'vscode';
 import { glob } from 'glob';
@@ -2016,8 +2017,24 @@ export class Builder {
         if (javaFiles.size > 0) {
             const tomcatLibs = path.join(tomcatHome, 'lib', '*');
             const compileTargets = Array.from(javaFiles);
-            const cmd = `"${javacPath}" -d "${classesDir}" -cp "${tomcatLibs}" ${compileTargets.map(f => `"${f}"`).join(' ')}`;
-            await this.executeCommand(cmd, projectDir);
+
+            const escapeForCmd = (value: string) => `"${value.replace(/(["\\])/g, '\\$1')}"`;
+
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-javac-'));
+            const argsFile = path.join(tempDir, 'sources.args');
+            const argsFileContent = compileTargets
+                .map(filePath => escapeForCmd(filePath))
+                .join(os.EOL);
+
+            fs.writeFileSync(argsFile, argsFileContent, 'utf8');
+
+            const cmd = `${escapeForCmd(javacPath)} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(tomcatLibs)} @${escapeForCmd(argsFile)}`;
+
+            try {
+                await this.executeCommand(cmd, projectDir);
+            } finally {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            }
         }
     
         const libDir = path.join(projectDir, 'lib');

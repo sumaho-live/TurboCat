@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.21]
+- Prevented `spawn ENAMETOOLONG` errors during Local deployment by invoking `javac` with a generated args file, enabling large Eclipse projects to compile reliably.
+
 ## [0.0.20]
 - Improved Local deployment to honor detected Eclipse-style project layouts (WebContent/src/bin) without manual directory rewrites.
 - Updated Smart Deploy watchers to monitor Eclipse web resources and compiled class folders for immediate/queued synchronization.
