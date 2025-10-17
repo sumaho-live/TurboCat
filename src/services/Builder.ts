@@ -736,6 +736,15 @@ export class Builder {
 
         logger.info(`Using ${buildType} deployment pipeline`);
 
+        try {
+            this.projectStructure = this.detectProjectStructure();
+        } catch (error) {
+            logger.warn('Unable to refresh project structure before deployment');
+            if (error) {
+                logger.debug(`Project structure detection error: ${error}`);
+            }
+        }
+
         const appName = path.basename(projectDir);
         const tomcatHome = await tomcat.findTomcatHome();
         
@@ -999,20 +1008,52 @@ export class Builder {
      * Setup static resource file watcher for immediate deployment
      */
     private setupStaticResourceWatcher(workspaceRoot: string): void {
-        // Monitor src directory but exclude Java files
-        const srcPattern = new vscode.RelativePattern(workspaceRoot, 'src/**/*');
-        const staticWatcher = vscode.workspace.createFileSystemWatcher(srcPattern);
-        
-        logger.info(`📁 Static Resource Watcher: ${workspaceRoot}/src (excluding .java files)`);
-        logger.info(`⚡ Strategy: Immediate deployment for web resources`);
-        
-        // Set up event handlers for static resources
-        staticWatcher.onDidChange((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'change'));
-        staticWatcher.onDidCreate((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'create'));
-        staticWatcher.onDidDelete?.((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'delete'));
-        
-        this.fileWatchers.push(staticWatcher);
-        logger.info(`✓ Static resource watcher active`);
+        const structure = this.projectStructure;
+        const candidateRoots = new Set<string>();
+
+        if (structure?.webResourceRoots?.length) {
+            structure.webResourceRoots.forEach(root => candidateRoots.add(root));
+        }
+
+        candidateRoots.add(path.join('src', 'main', 'webapp'));
+        candidateRoots.add(path.join('src', 'main', 'resources'));
+        candidateRoots.add('src');
+
+        let watcherCreated = false;
+
+        candidateRoots.forEach(root => {
+            if (!root || root.includes('*')) {
+                return;
+            }
+
+            const normalized = root.replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
+            const absolute = path.join(workspaceRoot, normalized);
+
+            if (!fs.existsSync(absolute)) {
+                logger.debug(`Skipping static watcher for ${normalized} (directory not found)`);
+                return;
+            }
+
+            const globPattern = `${normalized.replace(/\\/g, '/')}/**/*`;
+            const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+            logger.info(`📁 Static Resource Watcher: ${absolute}`);
+            logger.info(`⚡ Strategy: Immediate deployment for web resources`);
+
+            watcher.onDidChange((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'change'));
+            watcher.onDidCreate((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'create'));
+            watcher.onDidDelete?.((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'delete'));
+
+            this.fileWatchers.push(watcher);
+            watcherCreated = true;
+        });
+
+        if (!watcherCreated) {
+            logger.warn('No static resource watcher configured. Verify resource directories exist.');
+        } else {
+            logger.info('✓ Static resource watcher configuration complete');
+        }
     }
 
     /**
@@ -1021,35 +1062,52 @@ export class Builder {
     private setupCompiledFileWatcher(workspaceRoot: string): void {
         if (!this.projectStructure) return;
 
-        // Determine output directory pattern based on project type
-        let outputPattern: string;
-        switch (this.projectStructure.type) {
-            case 'maven':
-                outputPattern = 'target/classes/**/*.class';
-                break;
-            case 'gradle':
-                outputPattern = 'build/classes/java/main/**/*.class';
-                break;
-            case 'eclipse':
-            case 'plain':
-            default:
-                outputPattern = 'bin/**/*.class';
-                break;
+        const primaryOutput = this.projectStructure.javaOutputDir || path.join('target', 'classes');
+        const outputCandidates = new Set<string>([primaryOutput]);
+
+        if (this.projectStructure.type === 'gradle') {
+            outputCandidates.add(path.join('build', 'classes', 'java', 'main'));
+        } else if (this.projectStructure.type === 'maven') {
+            outputCandidates.add(path.join('target', 'classes'));
+        } else {
+            outputCandidates.add('bin');
         }
 
-        const compiledPattern = new vscode.RelativePattern(workspaceRoot, outputPattern);
-        const compiledWatcher = vscode.workspace.createFileSystemWatcher(compiledPattern);
-        
-        logger.info(`� Compiled File Watcher: ${workspaceRoot}/${outputPattern}`);
-        logger.info(`⏱️ Strategy: Delayed deployment for compiled classes`);
-        
-        // Set up event handlers for compiled files
-        compiledWatcher.onDidChange((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'change'));
-        compiledWatcher.onDidCreate((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'create'));
-        compiledWatcher.onDidDelete?.((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'delete'));
-        
-        this.fileWatchers.push(compiledWatcher);
-        logger.info(`✓ Compiled file watcher active`);
+        let watcherCreated = false;
+
+        outputCandidates.forEach(root => {
+            if (!root || root.includes('*')) {
+                return;
+            }
+
+            const normalized = root.replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
+            const absolute = path.join(workspaceRoot, normalized);
+
+            if (!fs.existsSync(absolute)) {
+                logger.debug(`Skipping compiled watcher for ${normalized} (directory not found)`);
+                return;
+            }
+
+            const globPattern = `${normalized.replace(/\\/g, '/')}/**/*.class`;
+            const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+            logger.info(`🧱 Compiled File Watcher: ${absolute}`);
+            logger.info(`⏱️ Strategy: Delayed deployment for compiled classes`);
+
+            watcher.onDidChange((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'change'));
+            watcher.onDidCreate((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'create'));
+            watcher.onDidDelete?.((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'delete'));
+
+            this.fileWatchers.push(watcher);
+            watcherCreated = true;
+        });
+
+        if (!watcherCreated) {
+            logger.warn('No compiled file watcher configured. Verify build output directories exist.');
+        } else {
+            logger.info('✓ Compiled file watcher active');
+        }
     }
 
     /**
@@ -1921,15 +1979,19 @@ export class Builder {
      * @throws Error if build fails or java source compilation fails or if webapp directory not found
      */
     private async localDeploy(projectDir: string, targetDir: string, tomcatHome: string) {
-        const webAppPath = path.join(projectDir, 'src', 'main', 'webapp');
-        if (!fs.existsSync(webAppPath)) {
-            throw new Error(`WebApp directory not found: ${webAppPath}`);
+        const structure = this.projectStructure ?? this.detectProjectStructure();
+        const webResourceCandidates = [
+            ...(structure.webResourceRoots || []),
+            path.join('src', 'main', 'webapp')
+        ];
+        const webAppPath = this.findFirstExistingPath(projectDir, webResourceCandidates);
+        if (!webAppPath) {
+            throw new Error(`Web resource directory not found. Checked: ${webResourceCandidates.join(', ')}`);
         }
         const javaHome = await tomcat.findJavaHome();
         if (!javaHome) return;
 
         const javacPath = path.join(javaHome, 'bin', 'javac');
-        const javaSourcePath = path.join(projectDir, 'src', 'main', 'java');
         const classesDir = path.join(targetDir, 'WEB-INF', 'classes');
     
         this.brutalSync(webAppPath, targetDir, true);
@@ -1937,18 +1999,32 @@ export class Builder {
         fs.rmSync(classesDir, { force: true, recursive: true });
         fs.mkdirSync(classesDir, { recursive: true });
     
-        if (fs.existsSync(javaSourcePath)) {
-            const javaFiles = await this.findFiles(path.join(javaSourcePath, '**', '*.java'));
-            if (javaFiles.length > 0) {
-                const tomcatLibs = path.join(tomcatHome, 'lib', '*');
-                const cmd = `"${javacPath}" -d "${classesDir}" -cp "${tomcatLibs}" ${javaFiles.map(f => `"${f}"`).join(' ')}`;
-                await this.executeCommand(cmd, projectDir);
+        const javaSourceRoots = structure.javaSourceRoots && structure.javaSourceRoots.length > 0
+            ? structure.javaSourceRoots
+            : [path.join('src', 'main', 'java')];
+
+        const javaFiles = new Set<string>();
+        for (const sourceRoot of javaSourceRoots) {
+            const sourcePath = this.findFirstExistingPath(projectDir, [sourceRoot]);
+            if (!sourcePath) {
+                continue;
             }
+            const files = await this.findFiles(path.join(sourcePath, '**', '*.java'));
+            files.forEach(file => javaFiles.add(file));
+        }
+
+        if (javaFiles.size > 0) {
+            const tomcatLibs = path.join(tomcatHome, 'lib', '*');
+            const compileTargets = Array.from(javaFiles);
+            const cmd = `"${javacPath}" -d "${classesDir}" -cp "${tomcatLibs}" ${compileTargets.map(f => `"${f}"`).join(' ')}`;
+            await this.executeCommand(cmd, projectDir);
         }
     
         const libDir = path.join(projectDir, 'lib');
         const targetLib = path.join(targetDir, 'WEB-INF', 'lib');
-        this.brutalSync(libDir, targetLib);
+        if (fs.existsSync(libDir)) {
+            this.brutalSync(libDir, targetLib);
+        }
     }
 
     /**
@@ -2096,6 +2172,28 @@ export class Builder {
                 resolve();
             });
         });
+    }
+
+    /**
+     * Resolve the first existing path from the provided candidates.
+     */
+    private findFirstExistingPath(baseDir: string, candidates: string[]): string | null {
+        for (const candidate of candidates) {
+            if (!candidate) {
+                continue;
+            }
+
+            const normalized = candidate.replace(/^[/\\]+/, '');
+            const absolutePath = path.isAbsolute(normalized)
+                ? normalized
+                : path.join(baseDir, normalized);
+
+            if (fs.existsSync(absolutePath)) {
+                return absolutePath;
+            }
+        }
+
+        return null;
     }
 
     /**

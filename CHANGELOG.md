@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.20]
+- Improved Local deployment to honor detected Eclipse-style project layouts (WebContent/src/bin) without manual directory rewrites.
+- Updated Smart Deploy watchers to monitor Eclipse web resources and compiled class folders for immediate/queued synchronization.
+
 ## [0.0.19]
 - Treated Tomcat start exit code 143 (or SIGTERM signal) as successful during reloads, preventing spurious “Start failed” errors after a restart.
 

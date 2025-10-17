@@ -40,7 +40,7 @@ TurboCat autodetects common Java web structures:
 
 - **Maven** (`pom.xml` with WAR packaging) → runs `mvn clean package`.
 - **Gradle** (`build.gradle` / `.kts`) → runs the `war` task once and reuses the output.
-- **Local / Eclipse-style** (`WebContent`, `src/main/webapp`, or `bin`) → syncs files directly and compiles Java sources with `javac`.
+- **Local / Eclipse-style** (`WebContent`, `src/main/webapp`, or `bin`) → syncs files directly and compiles Java sources with `javac`; smart deploy now auto-watches `WebContent` assets and the `bin` output.
 
 When multiple layouts are detected, TurboCat asks for a single confirmation and persists the answer at the workspace level.
 
