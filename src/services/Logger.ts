@@ -90,8 +90,12 @@ export class Logger {
     public deactivate(): void {
         this.outputChannel.dispose();
         this.statusBarItem?.dispose();
-        if (this.fileCheckInterval) clearInterval(this.fileCheckInterval);
-        if (this.unifiedLogWatcher) this.unifiedLogWatcher.close();
+        if (this.fileCheckInterval) {
+            clearInterval(this.fileCheckInterval);
+        }
+        if (this.unifiedLogWatcher) {
+            this.unifiedLogWatcher.close();
+        }
         this.logWatchers.forEach(watcher => fs.unwatchFile(watcher.file, watcher.listener));
         this.accessLogStream?.destroy();
         this.accessLogWatcher?.close();
@@ -140,7 +144,9 @@ export class Logger {
      * Start monitoring Tomcat log files
      */
     public startLogFileWatcher(): void {
-        if (!this.tomcatHome) return;
+        if (!this.tomcatHome) {
+            return;
+        }
 
         const logsDir = path.join(this.tomcatHome, 'logs');
         
@@ -196,7 +202,9 @@ export class Logger {
      */
     private setupRealtimeAccessLog(logPath: string) {
         this.accessLogWatcher = fs.watch(logPath, (eventType) => {
-            if (eventType === 'change') this.handleLiveLogUpdate(logPath);
+            if (eventType === 'change') {
+                this.handleLiveLogUpdate(logPath);
+            }
         });
 
         this.accessLogStream = fs.createReadStream(logPath, {
@@ -208,7 +216,9 @@ export class Logger {
         this.accessLogStream.on('data', (data) => {
             const lines = data.toString().split('\n');
             lines.forEach(line => {
-                if (line.trim()) this.processAccessLogLine(line);
+                if (line.trim()) {
+                    this.processAccessLogLine(line);
+                }
             });
         });
     }
@@ -251,7 +261,9 @@ export class Logger {
                 .filter(file => file.startsWith('localhost_access_log.'))
                 .sort((a, b) => this.extractDate(b) - this.extractDate(a));
 
-            if (logFiles.length === 0) return;
+            if (logFiles.length === 0) {
+                return;
+            }
 
             const latestFile = path.join(logsDir, logFiles[0]);
             if (latestFile !== this.currentLogFile) {
@@ -278,7 +290,9 @@ export class Logger {
         this.currentLogFile = newFile;
 
         fs.stat(newFile, (err) => {
-            if (err) return;
+            if (err) {
+                return;
+            }
 
             // Create single optimized file watcher
             const listener: fs.StatsListener = (curr, prev) => {

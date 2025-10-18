@@ -819,7 +819,7 @@ export class Builder {
             }[buildType];
 
             if (!action) {
-                throw(`Invalid deployment type: ${buildType}`);
+                throw new Error(`Invalid deployment type: ${buildType}`);
             }
 
             const startTime = performance.now();
@@ -1127,7 +1127,9 @@ export class Builder {
      * Setup compiled file watcher for delayed deployment
      */
     private setupCompiledFileWatcher(workspaceRoot: string): void {
-        if (!this.projectStructure) return;
+        if (!this.projectStructure) {
+            return;
+        }
 
         const outputCandidates = new Set<string>();
 
@@ -1225,7 +1227,9 @@ export class Builder {
         
         // Get relative path from workspace root
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return;
+        if (!workspaceRoot) {
+            return;
+        }
         
         const relativePath = path.relative(workspaceRoot, uri.fsPath);
         logger.info(`🔥 Static resource ${eventType}: ${fileName} (${relativePath})`);
@@ -1240,7 +1244,9 @@ export class Builder {
      */
     private async handleJavaFileChange(javaFilePath: string, _eventType: 'change' | 'create' | 'delete'): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return;
+        if (!workspaceRoot) {
+            return;
+        }
 
         const fileName = path.basename(javaFilePath, '.java');
         const relativePath = path.relative(workspaceRoot, javaFilePath);
@@ -1286,7 +1292,9 @@ export class Builder {
      */
     private async performComprehensiveClassScan(javaFilePath: string, className: string): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) return;
+        if (!workspaceRoot || !this.projectStructure) {
+            return;
+        }
 
         const outputDirs = this.resolveCompiledOutputDirectories();
         const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
@@ -1432,7 +1440,9 @@ export class Builder {
      */
     private async checkAndDeployCompiledClass(_javaFilePath: string, className: string): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) return;
+        if (!workspaceRoot || !this.projectStructure) {
+            return;
+        }
 
         const outputDirs = this.resolveCompiledOutputDirectories();
         const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
@@ -1629,7 +1639,9 @@ export class Builder {
         
         // Get relative path from workspace root
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return;
+        if (!workspaceRoot) {
+            return;
+        }
         
         const relativePath = path.relative(workspaceRoot, uri.fsPath);
         logger.info(`🔧 Compiled file ${eventType}: ${fileName} (${relativePath})`);
@@ -2060,7 +2072,9 @@ export class Builder {
             throw new Error(`Web resource directory not found. Checked: ${webResourceCandidates.join(', ')}`);
         }
         const javaHome = await tomcat.findJavaHome();
-        if (!javaHome) return;
+        if (!javaHome) {
+            return;
+        }
 
         const javacPath = path.join(javaHome, 'bin', 'javac');
         const classesDir = path.join(targetDir, 'WEB-INF', 'classes');
@@ -2227,7 +2241,7 @@ export class Builder {
      */
     private async mavenDeploy(projectDir: string, targetDir: string) {
         if (!fs.existsSync(path.join(projectDir, 'pom.xml'))) {
-            throw('pom.xml not found.');
+            throw new Error('pom.xml not found.');
         }
 
         try {
@@ -2249,13 +2263,13 @@ export class Builder {
         
             const uniqueLines = [...new Set(lines)];
                 
-            throw(uniqueLines.join('\n'));
+            throw new Error(uniqueLines.join('\n'));
         }
 
         const targetPath = path.join(projectDir, 'target');
         const warFiles = fs.readdirSync(targetPath).filter((file: string) => file.toLowerCase().endsWith('.war'));
         if (warFiles.length === 0) {
-            throw('No WAR file found after Maven build.');
+            throw new Error('No WAR file found after Maven build.');
         }
 
         const warFileName = warFiles[0];
@@ -2296,15 +2310,15 @@ export class Builder {
      */
     private async gradleDeploy(projectDir: string, targetDir: string, appName: string) {
         if (!fs.existsSync(path.join(projectDir, 'build.gradle'))) {
-            throw('build.gradle not found.');
+            throw new Error('build.gradle not found.');
         }
 
         const gradleCmd = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
         await this.executeCommand(`${gradleCmd} war -PfinalName=${appName}`, projectDir);
 
         const warFile = path.join(projectDir, 'build', 'libs', `${appName}.war`);
-        if (!warFile) {
-            throw('No WAR file found after Gradle build.');
+        if (!fs.existsSync(warFile)) {
+            throw new Error('No WAR file found after Gradle build.');
         }
 
         fs.rmSync(targetDir, { recursive: true, force: true });
@@ -2553,7 +2567,9 @@ export class Builder {
      */
     private async saveSmartDeployConfig(config: SmartDeployConfig): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return;
+        if (!workspaceRoot) {
+            return;
+        }
 
         const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
         const configDir = path.dirname(configPath);
@@ -2573,7 +2589,9 @@ export class Builder {
      */
     private compileMappings(config: SmartDeployConfig): CompiledMapping[] {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return [];
+        if (!workspaceRoot) {
+            return [];
+        }
 
         const combinedMappings = this.buildCombinedMappings(config);
 
@@ -2800,10 +2818,14 @@ export class Builder {
      * Check if a file matches any compiled mapping with enhanced debugging
      */
     private findMatchingMapping(filePath: string): CompiledMapping | null {
-        if (!this.compiledMappings) return null;
+        if (!this.compiledMappings) {
+            return null;
+        }
 
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return null;
+        if (!workspaceRoot) {
+            return null;
+        }
 
         // Normalize paths for cross-platform compatibility
         const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
@@ -2862,10 +2884,14 @@ export class Builder {
      */
     private async generateDestinationPath(mapping: CompiledMapping, sourceFile: string): Promise<string> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return '';
+        if (!workspaceRoot) {
+            return '';
+        }
 
         const tomcatHome = await tomcat.findTomcatHome();
-        if (!tomcatHome) return '';
+        if (!tomcatHome) {
+            return '';
+        }
 
         // Get the webapp directory
         const webappDir = path.join(tomcatHome, 'webapps', this.projectStructure?.webappName || '');
@@ -2903,7 +2929,9 @@ export class Builder {
      */
     private extractRelativePortionFromMapping(mapping: CompiledMapping, relativePath: string, sourceFile: string): string {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) return path.basename(sourceFile);
+        if (!workspaceRoot) {
+            return path.basename(sourceFile);
+        }
 
         // Normalize all paths to use forward slashes for consistent processing
         const sourcePattern = this.normalizePath(mapping.source);
@@ -2965,7 +2993,9 @@ export class Builder {
      * Check if a path starts with a given prefix, handling edge cases
      */
     private pathStartsWith(fullPath: string, prefix: string): boolean {
-        if (!prefix || prefix === '.') return true;
+        if (!prefix || prefix === '.') {
+            return true;
+        }
         
         const normalizedPrefix = prefix.replace(/\/+$/, ''); // Remove trailing slashes
         return fullPath === normalizedPrefix || fullPath.startsWith(normalizedPrefix + '/');
@@ -2976,7 +3006,9 @@ export class Builder {
      */
     private extractClassRelativePath(sourceFile: string, relativePath: string): string {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) return path.basename(sourceFile);
+        if (!workspaceRoot || !this.projectStructure) {
+            return path.basename(sourceFile);
+        }
 
         // Determine the output directory based on project type
         let outputPattern: string;

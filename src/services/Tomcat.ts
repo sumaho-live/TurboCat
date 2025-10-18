@@ -349,18 +349,24 @@ export class Tomcat {
      * @returns Boolean indicating server running state
      */
     private async isTomcatRunning(): Promise<boolean> {
-        if (this.tomcatProcess && !this.tomcatProcess.killed) return true;
+        if (this.tomcatProcess && !this.tomcatProcess.killed) {
+            return true;
+        }
         try {
             let command: string;
 
             if (process.platform === 'win32') {
-                command = `netstat -an | findstr ":${this.port}"`;
+                command = `netstat -ano | findstr ":${this.port}"`;
             } else {
                 command = `netstat -an | grep ":${this.port}"`;
             }
 
             const { stdout } = await execAsync(command);
-            return stdout.includes(`0.0.0.0:${this.port}`);
+            const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+            return lines.some(line =>
+                line.includes(`:${this.port}`) &&
+                /LISTENING/i.test(line)
+            );
         } catch (error) {
             return false;
         }
@@ -619,7 +625,7 @@ export class Tomcat {
         );
 
         if (!updatedContent.includes(`port="${newPort}"`)) {
-            throw (`Failed to update port in server.xml`);
+            throw new Error('Failed to update port in server.xml');
         }
 
         await fsp.writeFile(serverXmlPath, updatedContent);

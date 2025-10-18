@@ -2,9 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.25]
+## [0.1.0]
+- Added mapping-based resource synchronization for Local/Eclipse projects so Local deploy and Smart Deploy reuse the same rules.
 - Smart deploy now derives compiled output directories from configured mappings, so pointing `source` to `target/classes/**/*.class` stops the background watchers from probing legacy `bin/` folders.
 - Documentation refreshed to highlight that class mappings drive watcher paths for Local/Eclipse projects.
+- Improved Tomcat running-state detection on Windows by requiring `LISTENING` matches from `netstat -ano`, preventing the toolbar from reporting "running" after the process terminates.
 
 ## [0.0.24]
 - Fixed the status-bar toolbar falsely showing Tomcat as running when no `turbocat.home` is configured.
