@@ -1129,14 +1129,21 @@ export class Builder {
     private setupCompiledFileWatcher(workspaceRoot: string): void {
         if (!this.projectStructure) return;
 
-        const primaryOutput = this.projectStructure.javaOutputDir || path.join('target', 'classes');
-        const outputCandidates = new Set<string>([primaryOutput]);
+        const outputCandidates = new Set<string>();
 
-        if (this.projectStructure.type === 'gradle') {
-            outputCandidates.add(path.join('build', 'classes', 'java', 'main'));
-        } else if (this.projectStructure.type === 'maven') {
-            outputCandidates.add(path.join('target', 'classes'));
-        } else {
+        const mappingOutputs = this.resolveCompiledOutputDirectories();
+        mappingOutputs.forEach(absPath => {
+            const relative = path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
+            if (relative && !relative.startsWith('..')) {
+                outputCandidates.add(relative);
+            }
+        });
+
+        if (!outputCandidates.size && this.projectStructure.javaOutputDir) {
+            outputCandidates.add(this.projectStructure.javaOutputDir);
+        }
+
+        if (!outputCandidates.size) {
             outputCandidates.add('bin');
         }
 
@@ -1281,29 +1288,23 @@ export class Builder {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot || !this.projectStructure) return;
 
-        // Determine output directory
-        let outputDir: string;
-        switch (this.projectStructure.type) {
-            case 'maven':
-                outputDir = path.join(workspaceRoot, 'target/classes');
-                break;
-            case 'gradle':
-                outputDir = path.join(workspaceRoot, 'build/classes/java/main');
-                break;
-            default:
-                outputDir = path.join(workspaceRoot, 'bin');
-                break;
-        }
+        const outputDirs = this.resolveCompiledOutputDirectories();
+        const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
 
-        if (!fs.existsSync(outputDir)) {
+        if (!existingOutputDirs.length) {
             return;
         }
 
         try {
             logger.debug(`🔍 Performing comprehensive scan for ${className}.java`);
 
-            // Find all class files that might be related to this Java file
-            const allPossibleMatches = await this.findAllPossibleClassMatches(outputDir, className, javaFilePath);
+            const allPossibleMatchesSet = new Set<string>();
+            for (const outputDir of existingOutputDirs) {
+                const matches = await this.findAllPossibleClassMatches(outputDir, className, javaFilePath);
+                matches.forEach(match => allPossibleMatchesSet.add(match));
+            }
+
+            const allPossibleMatches = Array.from(allPossibleMatchesSet);
 
             if (allPossibleMatches.length > 0) {
                 logger.info(`🎯 Comprehensive scan found ${allPossibleMatches.length} additional classes for ${className}.java`);
@@ -1433,35 +1434,33 @@ export class Builder {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot || !this.projectStructure) return;
 
-        // Determine output directory based on project type
-        let outputDir: string;
-        switch (this.projectStructure.type) {
-            case 'maven':
-                outputDir = path.join(workspaceRoot, 'target/classes');
-                break;
-            case 'gradle':
-                outputDir = path.join(workspaceRoot, 'build/classes/java/main');
-                break;
-            default:
-                outputDir = path.join(workspaceRoot, 'bin');
-                break;
-        }
+        const outputDirs = this.resolveCompiledOutputDirectories();
+        const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
 
-        if (!fs.existsSync(outputDir)) {
-            logger.debug(`Output directory not found: ${outputDir}`);
+        if (!existingOutputDirs.length) {
+            logger.debug(`No compiled output directories found. Checked: ${outputDirs.join(', ') || 'none'}`);
             return;
         }
 
         try {
             // Strategy 1: Find direct class file matches (including inner classes)
-            const directMatches = await this.findDirectClassMatches(outputDir, className);
-            
+            const directMatches: string[] = [];
+            for (const outputDir of existingOutputDirs) {
+                directMatches.push(...await this.findDirectClassMatches(outputDir, className));
+            }
+
             // Strategy 2: Find recently modified class files in the same package
-            const recentMatches = await this.findRecentlyModifiedClasses(outputDir, className);
-            
+            const recentMatches: string[] = [];
+            for (const outputDir of existingOutputDirs) {
+                recentMatches.push(...await this.findRecentlyModifiedClasses(outputDir, className));
+            }
+
             // Strategy 3: Find all class files that might be affected by this Java file change
-            const packageMatches = await this.findPackageRelatedClasses(outputDir, className);
-            
+            const packageMatches: string[] = [];
+            for (const outputDir of existingOutputDirs) {
+                packageMatches.push(...await this.findPackageRelatedClasses(outputDir, className));
+            }
+
             // Combine all matches and remove duplicates
             const allMatches = new Set([...directMatches, ...recentMatches, ...packageMatches]);
             const classFiles = Array.from(allMatches);
@@ -2698,6 +2697,52 @@ export class Builder {
         }
 
         return normalized.replace(/\/+$/, '') || null;
+    }
+
+    private resolveCompiledOutputDirectories(): string[] {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            return [];
+        }
+
+        if ((!this.compiledMappings || !this.compiledMappings.length) && this.smartDeployConfig) {
+            this.compiledMappings = this.compileMappings(this.smartDeployConfig);
+        }
+
+        const outputs = new Set<string>();
+
+        if (this.compiledMappings) {
+            for (const mapping of this.compiledMappings) {
+                const isClassMapping =
+                    (mapping.extensions && mapping.extensions.includes('.class')) ||
+                    mapping.source.toLowerCase().includes('.class');
+
+                if (!isClassMapping) {
+                    continue;
+                }
+
+                const root = this.getMappingRoot(mapping.source);
+                if (root) {
+                    outputs.add(path.join(workspaceRoot, root));
+                }
+            }
+        }
+
+        if (!outputs.size) {
+            switch (this.projectStructure?.type) {
+                case 'maven':
+                    outputs.add(path.join(workspaceRoot, 'target/classes'));
+                    break;
+                case 'gradle':
+                    outputs.add(path.join(workspaceRoot, 'build/classes/java/main'));
+                    break;
+                default:
+                    outputs.add(path.join(workspaceRoot, 'bin'));
+                    break;
+            }
+        }
+
+        return Array.from(outputs);
     }
 
     private ensureLocalDeployStructure(config: SmartDeployConfig, options?: { injectTemplate?: boolean }): void {

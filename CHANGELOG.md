@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.25]
+- Smart deploy now derives compiled output directories from configured mappings, so pointing `source` to `target/classes/**/*.class` stops the background watchers from probing legacy `bin/` folders.
+- Documentation refreshed to highlight that class mappings drive watcher paths for Local/Eclipse projects.
+
 ## [0.0.24]
 - Fixed the status-bar toolbar falsely showing Tomcat as running when no `turbocat.home` is configured.
 - Added workspace `.vscode/tomcat-smart-deploy.json` templates for Local/Eclipse projects with `localDeploy.mappings` entries that synchronize custom folders (e.g., `conf/`) during Local deploys and smart deploy file watching.

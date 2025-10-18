@@ -67,6 +67,8 @@ Example: copy a `conf/` directory into `WEB-INF/classes/conf` every time TurboCa
 
 Each mapping uses workspace-relative paths. TurboCat automatically appends `**/*` to directory sources and `{relative}` placeholders to destinations so the directory structure is preserved. Toggle `enabled` to `false` to keep sample entries without activating them.
 
+Mappings that end in `.class` also teach Smart Deploy where to watch for compiled output. For example, setting `"source": "target/classes/**/*.class"` switches all background class sync from the legacy `bin/` folder to Maven’s output automatically.
+
 ## Java Debugging
 - Run **`TurboCat: Generate Java Debug Profile`** to create or refresh `.vscode/launch.json` with the correct attach configuration.
 - Start Tomcat in debug mode via **`TurboCat: Start in Debug Mode`**.
