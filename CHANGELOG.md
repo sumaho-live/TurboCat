@@ -2,8 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.22]
+## [0.0.23]
 - Added the `turbocat.compileEncoding` setting to control the `javac` `-encoding` value during Local deployments (defaults to UTF-8 for cross-platform builds).
+- Local deployment compilation now includes project libraries (e.g., `WEB-INF/lib`, `lib/`) on the `javac` classpath so Lombok and Spring annotations resolve without switching to Maven/Gradle builds.
 
 ## [0.0.21]
 - Prevented `spawn ENAMETOOLONG` errors during Local deployment by invoking `javac` with a generated args file, enabling large Eclipse projects to compile reliably.

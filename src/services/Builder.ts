@@ -2037,7 +2037,30 @@ export class Builder {
         }
 
         if (javaFiles.size > 0) {
-            const tomcatLibs = path.join(tomcatHome, 'lib', '*');
+            const classpathEntries = new Set<string>();
+            const addClasspathDir = (dir: string) => {
+                try {
+                    if (!dir) {
+                        return;
+                    }
+                    if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+                        classpathEntries.add(path.join(dir, '*'));
+                    }
+                } catch {
+                    // ignore inaccessible directories
+                }
+            };
+
+            classpathEntries.add(path.join(tomcatHome, 'lib', '*'));
+            addClasspathDir(path.join(projectDir, 'lib'));
+
+            if (webAppPath) {
+                addClasspathDir(path.join(webAppPath, 'WEB-INF', 'lib'));
+            }
+
+            addClasspathDir(path.join(targetDir, 'WEB-INF', 'lib'));
+
+            const classpath = Array.from(classpathEntries).join(path.delimiter);
             const compileTargets = Array.from(javaFiles);
 
             const escapeForCmd = (value: string) => `"${value.replace(/(["\\])/g, '\\$1')}"`;
@@ -2051,7 +2074,7 @@ export class Builder {
             fs.writeFileSync(argsFile, argsFileContent, 'utf8');
 
             const encodingArg = this.compileEncoding ? ` -encoding ${escapeForCmd(this.compileEncoding)}` : '';
-            const cmd = `${escapeForCmd(javacPath)}${encodingArg} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(tomcatLibs)} @${escapeForCmd(argsFile)}`;
+            const cmd = `${escapeForCmd(javacPath)}${encodingArg} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(classpath)} @${escapeForCmd(argsFile)}`;
 
             try {
                 await this.executeCommand(cmd, projectDir);
