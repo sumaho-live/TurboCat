@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.24]
+- Fixed the status-bar toolbar falsely showing Tomcat as running when no `turbocat.home` is configured.
+- Added workspace `.vscode/tomcat-smart-deploy.json` templates for Local/Eclipse projects with `localDeploy.mappings` entries that synchronize custom folders (e.g., `conf/`) during Local deploys and smart deploy file watching.
+- Local deployment now honours these mappings, copying each matching file into the configured webapp destination after compilation.
+- Documented the new mapping file workflow and example usage in the README.
+
 ## [0.0.23]
 - Added the `turbocat.compileEncoding` setting to control the `javac` `-encoding` value during Local deployments (defaults to UTF-8 for cross-platform builds).
 - Local deployment compilation now includes project libraries (e.g., `WEB-INF/lib`, `lib/`) on the `javac` classpath so Lombok and Spring annotations resolve without switching to Maven/Gradle builds.

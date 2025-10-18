@@ -22,6 +22,7 @@ export class Toolbar {
     // State tracking
     private isServerRunning: boolean | null = null;
     private isSmartDeployEnabled: boolean = false;
+    private hasConfiguredHome: boolean | null = null;
     private updateInterval: NodeJS.Timeout | null = null;
 
     /** Private constructor - create status bar items */
@@ -137,13 +138,16 @@ export class Toolbar {
     private async updateServerStatus(): Promise<void> {
         try {
             const tomcat = Tomcat.getInstance();
-            const isRunning = await tomcat.isRunning();
+            const hasConfiguredHome = await tomcat.hasValidTomcatHomeConfigured();
+            const isRunning = hasConfiguredHome ? await tomcat.isRunning() : false;
+            const configChanged = hasConfiguredHome !== this.hasConfiguredHome;
             
             // Update smart deploy button state
             this.updateSmartDeployButton();
             
             // Only update UI if state has changed
-            if (isRunning !== this.isServerRunning) {
+            if (isRunning !== this.isServerRunning || configChanged) {
+                this.hasConfiguredHome = hasConfiguredHome;
                 this.isServerRunning = isRunning;
                 
                 if (isRunning) {
@@ -153,6 +157,9 @@ export class Toolbar {
                     this.deployButton.hide();
                     this.stopButton.show();
                     this.reloadButton.show();
+                    this.startButton.text = "$(play) Start";
+                    this.startButton.tooltip = "Start Tomcat Server";
+                    this.startButton.command = 'turbocat.start';
                     
                     // Change background color to indicate running state
                     this.stopButton.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -169,11 +176,26 @@ export class Toolbar {
                     this.reloadButton.hide();
                     
                     // Change background color to indicate ready state
-                    this.startButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-                    this.debugButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-                    this.deployButton.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+                    const readyColor = hasConfiguredHome
+                        ? new vscode.ThemeColor('statusBarItem.prominentBackground')
+                        : undefined;
+                    this.startButton.backgroundColor = readyColor;
+                    this.debugButton.backgroundColor = readyColor;
+                    this.deployButton.backgroundColor = readyColor;
                     this.stopButton.backgroundColor = undefined;
                     this.reloadButton.backgroundColor = undefined;
+
+                    if (!hasConfiguredHome) {
+                        this.startButton.text = "$(gear) Configure Tomcat";
+                        this.startButton.tooltip = "Set 'turbocat.home' to enable Tomcat controls";
+                        this.startButton.command = 'turbocat.start';
+                        this.debugButton.text = "$(bug) Debug";
+                    } else {
+                        this.startButton.text = "$(play) Start";
+                        this.startButton.tooltip = "Start Tomcat Server";
+                        this.startButton.command = 'turbocat.start';
+                        this.debugButton.text = "$(bug) Debug";
+                    }
                 }
             }
         } catch (err) {

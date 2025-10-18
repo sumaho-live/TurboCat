@@ -65,15 +65,6 @@ interface MavenConfig {
 /**
  * Smart deployment mapping configuration
  */
-interface SmartDeployMapping {
-    source: string;
-    destination: string;
-    needsReload: boolean;
-    description?: string;
-    extensions?: string[];
-    excludeExtensions?: string[];
-}
-
 const tomcat = Tomcat.getInstance();
 const logger = Logger.getInstance();
 
@@ -95,10 +86,23 @@ interface SmartDeployMapping {
     excludeExtensions?: string[]; // File extensions to exclude
 }
 
+interface LocalDeployMapping {
+    source: string; // Directory or glob relative to workspace root
+    destination: string; // Destination relative to the deployed webapp root
+    description?: string;
+    enabled?: boolean;
+    needsReload?: boolean;
+    extensions?: string[];
+    excludeExtensions?: string[];
+}
+
 interface SmartDeployConfig {
     projectType: string; // Project type (maven, gradle, eclipse, plain)
     webappName: string; // Tomcat webapp name  
     mappings: SmartDeployMapping[]; // Array of file mappings
+    localDeploy?: {
+        mappings: LocalDeployMapping[];
+    };
     settings: {
         debounceTime: number; // Debounce time in milliseconds
         enabled: boolean; // Enable/disable smart deploy
@@ -494,6 +498,8 @@ interface CompiledMapping extends SmartDeployMapping {
     absoluteDestination: string;
     /** Compiled regex for source matching */
     sourceRegex: RegExp;
+    /** Source of the mapping configuration */
+    origin: 'smart' | 'local';
 }
 
 export class Builder {
@@ -555,6 +561,33 @@ export class Builder {
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
         this.loadSyncBypassPatterns();
         this.compileEncoding = this.resolveCompileEncoding();
+    }
+
+    /**
+     * Ensure a local deploy configuration template exists for plain/Eclipse projects.
+     */
+    public async ensureLocalConfigTemplate(): Promise<void> {
+        try {
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspaceRoot) {
+                return;
+            }
+
+            const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
+            this.projectStructure = this.detectProjectStructure();
+
+            if (!['plain', 'eclipse'].includes(this.projectStructure.type)) {
+                return;
+            }
+
+            if (fs.existsSync(configPath)) {
+                return;
+            }
+
+            this.smartDeployConfig = await this.loadSmartDeployConfig();
+        } catch (error) {
+            logger.debug(`Skipped creating local config template: ${error}`);
+        }
     }
 
     /**
@@ -1041,6 +1074,17 @@ export class Builder {
         candidateRoots.add(path.join('src', 'main', 'webapp'));
         candidateRoots.add(path.join('src', 'main', 'resources'));
         candidateRoots.add('src');
+
+        const localMappingCandidates = this.smartDeployConfig?.localDeploy?.mappings ?? [];
+        localMappingCandidates
+            .filter(mapping => mapping && mapping.enabled !== false)
+            .forEach(mapping => {
+                const normalizedSource = this.normalizeLocalMappingSource(mapping.source);
+                const root = this.getMappingRoot(normalizedSource);
+                if (root) {
+                    candidateRoots.add(root);
+                }
+            });
 
         let watcherCreated = false;
 
@@ -1804,7 +1848,7 @@ export class Builder {
     /**
      * Copy file with progress indication and logging
      */
-    private async copyFileWithLogging(source: string, target: string, type: 'class' | 'static'): Promise<void> {
+    private async copyFileWithLogging(source: string, target: string, type: 'class' | 'static' | 'local'): Promise<void> {
         try {
             // Check if source file exists
             if (!fs.existsSync(source)) {
@@ -1822,7 +1866,12 @@ export class Builder {
             fs.copyFileSync(source, target);
             
             const fileName = path.basename(source);
-            logger.info(`✓ Smart deployed ${type}: ${fileName}`);
+            const label = type === 'class'
+                ? 'Smart deployed class'
+                : type === 'static'
+                    ? 'Smart deployed static'
+                    : 'Local mapping synced';
+            logger.info(`✓ ${label}: ${fileName}`);
         } catch (error) {
             throw error;
         }
@@ -2083,10 +2132,83 @@ export class Builder {
             }
         }
     
+        await this.applyLocalDeployMappings();
+    
         const libDir = path.join(projectDir, 'lib');
         const targetLib = path.join(targetDir, 'WEB-INF', 'lib');
         if (fs.existsSync(libDir)) {
             this.brutalSync(libDir, targetLib);
+        }
+    }
+
+    /**
+     * Apply additional local deploy mappings defined in the workspace configuration.
+     */
+    private async applyLocalDeployMappings(): Promise<void> {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            return;
+        }
+
+        const tomcatHome = await tomcat.findTomcatHome();
+        if (!tomcatHome) {
+            return;
+        }
+
+        try {
+            if (!this.smartDeployConfig) {
+                this.smartDeployConfig = await this.loadSmartDeployConfig();
+            }
+
+            if (!this.smartDeployConfig) {
+                return;
+            }
+
+            if (!this.compiledMappings) {
+                this.compiledMappings = this.compileMappings(this.smartDeployConfig);
+            }
+
+            const localMappings = (this.compiledMappings || []).filter(mapping => mapping.origin === 'local');
+            if (!localMappings.length) {
+                return;
+            }
+
+            const visitedTargets = new Set<string>();
+
+            for (const mapping of localMappings) {
+                const absolutePattern = path.join(workspaceRoot, mapping.source);
+                const matches = await glob(absolutePattern, {
+                    nodir: true,
+                    windowsPathsNoEscape: process.platform === 'win32'
+                });
+
+                if (!matches.length) {
+                    logger.debug(`Local deploy mapping "${mapping.source}" did not match any files.`);
+                    continue;
+                }
+
+                for (const sourceFile of matches) {
+                    const targetPath = await this.generateDestinationPath(mapping, sourceFile);
+                    if (!targetPath) {
+                        continue;
+                    }
+
+                    let targetKey = targetPath;
+                    try {
+                        const stats = fs.statSync(sourceFile);
+                        targetKey = `${targetPath}|${stats.mtimeMs}`;
+                    } catch {
+                        // ignore stat errors; still attempt to copy
+                    }
+
+                    if (!visitedTargets.has(targetKey)) {
+                        await this.copyFileWithLogging(sourceFile, targetPath, 'local');
+                        visitedTargets.add(targetKey);
+                    }
+                }
+            }
+        } catch (error) {
+            logger.warn(`Local deploy mapping sync skipped: ${error}`);
         }
     }
 
@@ -2398,6 +2520,7 @@ export class Builder {
             try {
                 const configContent = fs.readFileSync(configPath, 'utf-8');
                 const config = JSON.parse(configContent) as SmartDeployConfig;
+                this.ensureLocalDeployStructure(config);
                 logger.info('Loaded smart deploy configuration from custom config file');
                 return config;
             } catch (error) {
@@ -2417,6 +2540,8 @@ export class Builder {
                 logLevel: 'info'
             }
         };
+
+        this.ensureLocalDeployStructure(defaultConfig, { injectTemplate: true });
 
         // Save default configuration
         await this.saveSmartDeployConfig(defaultConfig);
@@ -2451,7 +2576,9 @@ export class Builder {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) return [];
 
-        return config.mappings.map(mapping => {
+        const combinedMappings = this.buildCombinedMappings(config);
+
+        return combinedMappings.map(({ mapping, origin }) => {
             const absoluteSource = path.join(workspaceRoot, mapping.source);
             const absoluteDestination = mapping.destination;
             
@@ -2461,15 +2588,136 @@ export class Builder {
             // Anchor the pattern to match from start to end
             const sourceRegex = new RegExp(`^${regexPattern}$`);
 
-            logger.debug(`[${process.platform}] Compiled mapping: "${mapping.source}" -> regex: ${sourceRegex}`);
+            logger.debug(`[${process.platform}] Compiled mapping: "${mapping.source}" -> regex: ${sourceRegex} (origin: ${origin})`);
 
             return {
                 ...mapping,
                 absoluteSource,
                 absoluteDestination,
-                sourceRegex
+                sourceRegex,
+                origin
             };
         });
+    }
+
+    /**
+     * Combine smart deploy mappings with local deploy overrides.
+     */
+    private buildCombinedMappings(config: SmartDeployConfig): Array<{ mapping: SmartDeployMapping; origin: 'smart' | 'local'; }> {
+        const combined: Array<{ mapping: SmartDeployMapping; origin: 'smart' | 'local'; }> = [];
+        const seen = new Set<string>();
+
+        const pushMapping = (mapping: SmartDeployMapping, origin: 'smart' | 'local') => {
+            const key = `${mapping.source}|${mapping.destination}`;
+            if (seen.has(key)) {
+                logger.debug(`Skipping duplicate mapping override for ${mapping.source} → ${mapping.destination} (${origin})`);
+                return;
+            }
+            seen.add(key);
+            combined.push({ mapping, origin });
+        };
+
+        const localMappings = config.localDeploy?.mappings ?? [];
+        localMappings
+            .filter(mapping => mapping && mapping.enabled !== false)
+            .forEach(mapping => pushMapping(this.transformLocalMapping(mapping), 'local'));
+
+        if (Array.isArray(config.mappings)) {
+            config.mappings.forEach(mapping => pushMapping(mapping, 'smart'));
+        }
+
+        return combined;
+    }
+
+    /**
+     * Convert local deploy mapping entries to smart deploy mappings.
+     */
+    private transformLocalMapping(mapping: LocalDeployMapping): SmartDeployMapping {
+        const normalizedSource = this.normalizeLocalMappingSource(mapping.source);
+        const normalizedDestination = this.normalizeLocalMappingDestination(mapping.destination);
+
+        return {
+            source: normalizedSource,
+            destination: normalizedDestination,
+            needsReload: mapping.needsReload ?? false,
+            description: mapping.description || `Local deploy mapping (${normalizedSource} → ${normalizedDestination})`,
+            extensions: mapping.extensions,
+            excludeExtensions: mapping.excludeExtensions
+        };
+    }
+
+    private normalizeLocalMappingSource(source: string): string {
+        if (!source) {
+            return '**/*';
+        }
+
+        let normalized = source.replace(/\\/g, '/').replace(/^\/+/, '');
+
+        const hasWildcard = /[*?]/.test(normalized);
+        if (hasWildcard) {
+            return normalized;
+        }
+
+        normalized = normalized.replace(/\/+$/, '');
+        if (!normalized) {
+            return '**/*';
+        }
+
+        const ext = path.extname(normalized);
+        if (ext) {
+            return normalized;
+        }
+
+        return `${normalized}/**/*`;
+    }
+
+    private normalizeLocalMappingDestination(destination: string): string {
+        if (!destination) {
+            return '{relative}';
+        }
+
+        let normalized = destination.replace(/\\/g, '/').replace(/^\/+/, '');
+
+        if (!normalized.includes('{relative}')) {
+            normalized = normalized.replace(/\/+$/, '');
+            normalized = normalized ? `${normalized}/{relative}` : '{relative}';
+        }
+
+        return normalized;
+    }
+
+    private getMappingRoot(sourcePattern: string): string | null {
+        if (!sourcePattern) {
+            return null;
+        }
+
+        const normalized = sourcePattern.replace(/\\/g, '/').replace(/^\/+/, '');
+        const wildcardIndex = normalized.search(/[*?]/);
+        if (wildcardIndex >= 0) {
+            return normalized.substring(0, wildcardIndex).replace(/\/+$/, '') || null;
+        }
+
+        return normalized.replace(/\/+$/, '') || null;
+    }
+
+    private ensureLocalDeployStructure(config: SmartDeployConfig, options?: { injectTemplate?: boolean }): void {
+        if (!config.localDeploy || !Array.isArray(config.localDeploy.mappings)) {
+            config.localDeploy = { mappings: [] };
+        }
+
+        const shouldInjectTemplate = options?.injectTemplate &&
+            ['plain', 'eclipse'].includes(config.projectType) &&
+            config.localDeploy.mappings.length === 0;
+
+        if (shouldInjectTemplate) {
+            config.localDeploy.mappings.push({
+                description: 'Example: copy conf directory into WEB-INF/classes/conf',
+                source: 'conf',
+                destination: 'WEB-INF/classes/conf',
+                enabled: false,
+                needsReload: false
+            });
+        }
     }
 
     /**

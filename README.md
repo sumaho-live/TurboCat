@@ -44,6 +44,29 @@ TurboCat autodetects common Java web structures:
 
 When multiple layouts are detected, TurboCat asks for a single confirmation and persists the answer at the workspace level.
 
+### Workspace Mapping File
+
+Non-Maven projects gain a project-scoped mapping file at `.vscode/tomcat-smart-deploy.json`. TurboCat generates a template the first time it sees a local/Eclipse layout so you can describe extra resources that should be copied during a Local deploy. These mappings are also consumed by Smart Deploy, so a single change keeps both manual deployments and background sync in agreement.
+
+Example: copy a `conf/` directory into `WEB-INF/classes/conf` every time TurboCat deploys the app:
+
+```json
+{
+  "localDeploy": {
+    "mappings": [
+      {
+        "description": "Copy conf resources into WEB-INF/classes/conf",
+        "source": "conf",
+        "destination": "WEB-INF/classes/conf",
+        "enabled": true
+      }
+    ]
+  }
+}
+```
+
+Each mapping uses workspace-relative paths. TurboCat automatically appends `**/*` to directory sources and `{relative}` placeholders to destinations so the directory structure is preserved. Toggle `enabled` to `false` to keep sample entries without activating them.
+
 ## Java Debugging
 - Run **`TurboCat: Generate Java Debug Profile`** to create or refresh `.vscode/launch.json` with the correct attach configuration.
 - Start Tomcat in debug mode via **`TurboCat: Start in Debug Mode`**.

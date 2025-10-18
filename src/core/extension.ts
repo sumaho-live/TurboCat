@@ -17,6 +17,9 @@ import { DebugProfile } from '../services/DebugProfile';
 export function activate(context: vscode.ExtensionContext) {
     const builder = Builder.getInstance();
     const tomcat = Tomcat.getInstance();
+    builder.ensureLocalConfigTemplate().catch(error => {
+        Logger.getInstance().debug(`Local config template setup skipped: ${error}`);
+    });
     // Initialize the Tomcat toolbar
     const toolbar = Toolbar.getInstance();
     toolbar.init();

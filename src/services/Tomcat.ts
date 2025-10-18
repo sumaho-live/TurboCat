@@ -324,6 +324,20 @@ export class Tomcat {
     }
 
     /**
+     * Check whether a valid Tomcat home directory is currently configured.
+     */
+    public async hasValidTomcatHomeConfigured(): Promise<boolean> {
+        if (!this.tomcatHome) {
+            return false;
+        }
+        try {
+            return await this.validateTomcatHome(this.tomcatHome);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Server process status check
      * 
      * Implements platform-specific process detection:
