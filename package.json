@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -122,8 +122,7 @@
         "title": "TurboCat: Generate Java Debug Profile"
       }
     ],
-    "menus": {
-    },
+    "menus": {},
     "configuration": {
       "title": "TurboCat",
       "properties": {
@@ -217,6 +216,12 @@
           ],
           "default": "Auto",
           "description": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, or Gradle to force a specific pipeline."
+        },
+        "turbocat.deployPath": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "Override the Tomcat webapp directory relative to `webapps`. Leave empty to deploy using the workspace folder name. For nested folders omit the leading slash (e.g. `web/jmics`)."
         },
         "turbocat.debugPort": {
           "type": "number",

@@ -27,6 +27,7 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 - Launches, stops, cleans, and reloads the server.
 - Updates `server.xml` on port changes and writes back to workspace settings.
 - Streams Tomcat process output to the logger.
+- Respects the workspace-level `turbocat.deployPath` override when resolving the active webapp.
 
 ### Builder Service
 - Detects project structure (Maven / Gradle / local) and remembers explicit overrides.
@@ -38,6 +39,7 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
   - Static resources (`src/**/*`) deploy immediately.
   - Compiled classes (`target/classes`, `build/classes`, etc.) are batched before syncing.
 - Coordinates batch reload decisions and maps file changes to Tomcat destinations.
+- Normalises the configured deployment directory (`turbocat.deployPath`) before generating targets.
 
 ### Logger Service
 - Maintains a single VS Code Output channel (`TurboCat`).

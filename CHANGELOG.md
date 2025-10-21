@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1]
+- Added the workspace-level `turbocat.deployPath` setting to decouple the Tomcat deployment directory from the project folder name.
+- Normalised deployment path handling in the Builder and Tomcat services so deploy/clean/smart deploy honour nested directories consistently.
+- Documented the new setting in the README and architecture guide.
+
 ## [0.1.0]
 - Added mapping-based resource synchronization for Local/Eclipse projects so Local deploy and Smart Deploy reuse the same rules.
 - Smart deploy now derives compiled output directories from configured mappings, so pointing `source` to `target/classes/**/*.class` stops the background watchers from probing legacy `bin/` folders.

@@ -129,6 +129,10 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
     } else if (event.affectsConfiguration('turbocat.tomcatEnvironment')) {
         Tomcat.getInstance().updateConfig();
 
+    } else if (event.affectsConfiguration('turbocat.deployPath')) {
+        Tomcat.getInstance().updateConfig();
+        Builder.getInstance().updateConfig();
+
     } else if (event.affectsConfiguration('turbocat.preferredBuildType') ||
         event.affectsConfiguration('turbocat.syncBypassPatterns')) {
         Builder.getInstance().updateConfig();

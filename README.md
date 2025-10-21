@@ -34,6 +34,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.syncBypassPatterns` | Filename keywords to skip syncing | Comma-separated list, default catches “copy” variants |
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
+| `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
 
 ## Project Types
 TurboCat autodetects common Java web structures:

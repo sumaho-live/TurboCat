@@ -74,6 +74,7 @@ interface ProjectStructure {
     javaSourceRoots: string[];
     webResourceRoots: string[];
     webappName: string;
+    defaultWebappName: string;
 }
 
 /** Smart deploy file mapping configuration */
@@ -523,6 +524,7 @@ export class Builder {
     private smartDeployConfig?: SmartDeployConfig;
     private compiledMappings?: CompiledMapping[];
     private compileEncoding: string;
+    private defaultSmartDeployWebappName?: string;
 
     // Legacy code (commented out for new implementation)
     // private deployDebouncer = new Map<string, NodeJS.Timeout>();
@@ -561,6 +563,7 @@ export class Builder {
         this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
         this.loadSyncBypassPatterns();
         this.compileEncoding = this.resolveCompileEncoding();
+        this.refreshEffectiveDeploymentTargets();
     }
 
     /**
@@ -605,6 +608,29 @@ export class Builder {
     }
 
     /**
+     * Resolve the effective web application name using the workspace configuration override.
+     */
+    private resolveWebappName(defaultName?: string): string {
+        const override = tomcat.getConfiguredDeploymentPath();
+        if (override) {
+            return override;
+        }
+
+        const candidate = (defaultName ?? '').trim();
+        if (candidate) {
+            const normalized = candidate.replace(/\\/g, '/');
+            return normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+        }
+
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspaceRoot) {
+            return path.basename(workspaceRoot);
+        }
+
+        return 'ROOT';
+    }
+
+    /**
      * Resolve the javac encoding flag from user configuration with basic validation.
      */
     private resolveCompileEncoding(): string {
@@ -621,6 +647,20 @@ export class Builder {
         }
 
         return value;
+    }
+
+    /**
+     * Refresh cached deployment targets using the latest workspace configuration override.
+     */
+    private refreshEffectiveDeploymentTargets(): void {
+        if (this.projectStructure) {
+            this.projectStructure.webappName = this.resolveWebappName(this.projectStructure.defaultWebappName);
+        }
+
+        if (this.smartDeployConfig) {
+            const baseName = this.defaultSmartDeployWebappName ?? this.smartDeployConfig.webappName;
+            this.smartDeployConfig.webappName = this.resolveWebappName(baseName);
+        }
     }
 
     /**
@@ -684,45 +724,53 @@ export class Builder {
         
         // Maven detection
         if (fs.existsSync(path.join(workspaceRoot, 'pom.xml'))) {
+            const defaultWebappName = this.getMavenArtifactId(workspaceRoot) || path.basename(workspaceRoot);
             return {
                 type: 'maven',
                 javaOutputDir: 'target/classes',
                 javaSourceRoots: ['src/main/java'],
                 webResourceRoots: ['src/main/webapp'],
-                webappName: this.getMavenArtifactId(workspaceRoot) || path.basename(workspaceRoot)
+                defaultWebappName,
+                webappName: this.resolveWebappName(defaultWebappName)
             };
         }
         
         // Gradle detection
         if (fs.existsSync(path.join(workspaceRoot, 'build.gradle')) || 
             fs.existsSync(path.join(workspaceRoot, 'build.gradle.kts'))) {
+            const defaultWebappName = this.getGradleProjectName(workspaceRoot) || path.basename(workspaceRoot);
             return {
                 type: 'gradle',
                 javaOutputDir: 'build/classes/java/main',
                 javaSourceRoots: ['src/main/java'],
                 webResourceRoots: ['src/main/webapp'],
-                webappName: this.getGradleProjectName(workspaceRoot) || path.basename(workspaceRoot)
+                defaultWebappName,
+                webappName: this.resolveWebappName(defaultWebappName)
             };
         }
         
         // Eclipse/Plain Java detection
         if (fs.existsSync(path.join(workspaceRoot, '.classpath'))) {
+            const defaultWebappName = path.basename(workspaceRoot);
             return {
                 type: 'eclipse',
                 javaOutputDir: 'bin',
                 javaSourceRoots: ['src'],
                 webResourceRoots: ['WebContent', 'web'],
-                webappName: path.basename(workspaceRoot)
+                defaultWebappName,
+                webappName: this.resolveWebappName(defaultWebappName)
             };
         }
         
         // Default fallback
+        const defaultWebappName = path.basename(workspaceRoot);
         return {
             type: 'plain',
             javaOutputDir: 'bin',
             javaSourceRoots: ['src'],
             webResourceRoots: ['web', 'webapp'],
-            webappName: path.basename(workspaceRoot)
+            defaultWebappName,
+            webappName: this.resolveWebappName(defaultWebappName)
         };
     }
 
@@ -801,7 +849,11 @@ export class Builder {
             }
         }
 
-        const appName = path.basename(projectDir);
+        const fallbackName = this.projectStructure?.defaultWebappName ?? path.basename(projectDir);
+        const appName = this.resolveWebappName(fallbackName);
+        if (this.projectStructure) {
+            this.projectStructure.webappName = appName;
+        }
         const tomcatHome = await tomcat.findTomcatHome();
         
         tomcat.setAppName(appName);
@@ -2509,10 +2561,12 @@ export class Builder {
                 logger.info('Loading smart deploy configuration from Maven pom.xml');
                 const mappings = await mavenParser.parseResourceMappings();
                 const webappConfig = await mavenParser.parseWebappConfiguration();
+                this.defaultSmartDeployWebappName = webappConfig.webappName;
+                const effectiveWebappName = this.resolveWebappName(this.defaultSmartDeployWebappName);
                 
                 const mavenConfig: SmartDeployConfig = {
                     projectType: 'maven',
-                    webappName: webappConfig.webappName,
+                    webappName: effectiveWebappName,
                     mappings: mappings,
                     settings: {
                         debounceTime: vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300),
@@ -2534,8 +2588,13 @@ export class Builder {
                 const configContent = fs.readFileSync(configPath, 'utf-8');
                 const config = JSON.parse(configContent) as SmartDeployConfig;
                 this.ensureLocalDeployStructure(config);
+                this.defaultSmartDeployWebappName = config.webappName;
+                const resolvedConfig: SmartDeployConfig = {
+                    ...config,
+                    webappName: this.resolveWebappName(this.defaultSmartDeployWebappName)
+                };
                 logger.info('Loaded smart deploy configuration from custom config file');
-                return config;
+                return resolvedConfig;
             } catch (error) {
                 logger.warn('Failed to parse smart deploy config, using defaults');
             }
@@ -2543,6 +2602,7 @@ export class Builder {
 
         // Priority 3: Create default configuration
         this.projectStructure = this.detectProjectStructure();
+        this.defaultSmartDeployWebappName = this.projectStructure.defaultWebappName;
         const defaultConfig: SmartDeployConfig = {
             projectType: this.projectStructure.type,
             webappName: this.projectStructure.webappName,

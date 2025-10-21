@@ -24,6 +24,7 @@ export class Tomcat {
     private currentAppName: string = '';
     private tomcatEnvironment: Record<string, string>;
     private lastStartMode: 'run' | 'debug';
+    private deployPath: string;
 
     private readonly PORT_RANGE = { min: 1024, max: 65535 };
 
@@ -36,6 +37,7 @@ export class Tomcat {
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
         this.lastStartMode = 'run';
+        this.deployPath = this.resolveDeployPathSetting();
     }
 
     /**
@@ -59,10 +61,15 @@ export class Tomcat {
      * Update configuration from workspace settings
      */
     public updateConfig(): void {
+        const previousDeployPath = this.deployPath;
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
+        this.deployPath = this.resolveDeployPathSetting();
+        if (previousDeployPath !== this.deployPath) {
+            this.currentAppName = '';
+        }
     }
 
     private loadTomcatEnvironment(): Record<string, string> {
@@ -89,13 +96,18 @@ export class Tomcat {
 
     /** Set application name for deployment */
     public setAppName(appName: string): void {
-        this.currentAppName = appName;
+        this.currentAppName = this.normalizeDeployPath(appName);
     }
 
     /** Get current application name or derive from workspace */
     public getAppName(): string {
         // If we already have an app name set, use it
         if (this.currentAppName) {
+            return this.currentAppName;
+        }
+
+        if (this.deployPath) {
+            this.currentAppName = this.deployPath;
             return this.currentAppName;
         }
         
@@ -109,6 +121,11 @@ export class Tomcat {
         
         // If all else fails, return ROOT as a default
         return "ROOT";
+    }
+
+    /** Return the configured deployment path override */
+    public getConfiguredDeploymentPath(): string {
+        return this.deployPath;
     }
 
     /**
@@ -783,5 +800,23 @@ export class Tomcat {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
+    }
+
+    private resolveDeployPathSetting(): string {
+        const configured = vscode.workspace.getConfiguration().get<string>('turbocat.deployPath', '') || '';
+        return this.normalizeDeployPath(configured);
+    }
+
+    private normalizeDeployPath(value: string): string {
+        const trimmed = (value ?? '').trim();
+        if (!trimmed) {
+            return '';
+        }
+
+        const normalized = trimmed.replace(/\\/g, '/');
+        const withoutLeading = normalized.replace(/^\/+/, '');
+        const withoutTrailing = withoutLeading.replace(/\/+$/, '');
+
+        return withoutTrailing;
     }
 }
