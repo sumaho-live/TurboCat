@@ -17,7 +17,7 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 - `TurboCat: Start` – boots Tomcat (debug mode available via `TurboCat: Start in Debug Mode`).
 - `TurboCat: Deploy` – detects Maven/Gradle/local layouts and keeps Tomcat in sync with the matching deployment pipeline.
 - `TurboCat: Clean` – removes the active webapp deployment and its cached work/temp artifacts.
-- `TurboCat: Reload` – reloads the active context or restarts when necessary.
+- `TurboCat: Reload` – reloads the active context or restarts when necessary, waiting for Tomcat to shut down cleanly before coming back up.
 - `TurboCat: Generate Java Debug Profile` – scaffolds `.vscode/launch.json` and keeps the attach port aligned with TurboCat settings.
 
 The status-bar toolbar hides actions that are not relevant to the current server state. When Tomcat is stopped you only see start/debug/deploy. Once the server is running the toolbar collapses to stop/reload/clean plus the smart deploy toggle. The Smart Deploy button now shows `Smart Deploy` or `Smart Deploy (Off)` so you can see the mode at a glance.
@@ -72,8 +72,7 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 
 ## Java Debugging
 - Run **`TurboCat: Generate Java Debug Profile`** to create or refresh `.vscode/launch.json` with the correct attach configuration.
-- Start Tomcat in debug mode via **`TurboCat: Start in Debug Mode`**.
-- Launch the generated **“Attach to Tomcat (TurboCat)”** configuration from VS Code’s Run and Debug panel to attach the Java debugger.
+- Launch the generated **“Attach to Tomcat (TurboCat)”** configuration from VS Code’s Run and Debug panel. TurboCat now checks Tomcat’s status and, when needed, restarts it in debug mode automatically before VS Code attaches.
 
 ## Logging
 - All output goes to a single VS Code Output channel named **TurboCat**.

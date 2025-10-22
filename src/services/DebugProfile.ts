@@ -19,6 +19,10 @@ export class DebugProfile {
         return DebugProfile.instance;
     }
 
+    public getAttachProfileName(): string {
+        return this.configName;
+    }
+
     public async generateJavaAttachProfile(): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) {

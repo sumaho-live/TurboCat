@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2]
+- Ensured stop/reload operations wait for Tomcat to terminate before restarting, preventing lingering processes from causing false "started" messages or reload failures.
+- When launching the default VS Code debug profile, TurboCat now restarts Tomcat in debug mode automatically if required.
+- Updated user documentation to cover the new lifecycle behaviour and debug workflow.
+
 ## [0.1.1]
 - Added the workspace-level `turbocat.deployPath` setting to decouple the Tomcat deployment directory from the project folder name.
 - Normalised deployment path handling in the Builder and Tomcat services so deploy/clean/smart deploy honour nested directories consistently.

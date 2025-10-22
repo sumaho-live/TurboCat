@@ -28,6 +28,8 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 - Updates `server.xml` on port changes and writes back to workspace settings.
 - Streams Tomcat process output to the logger.
 - Respects the workspace-level `turbocat.deployPath` override when resolving the active webapp.
+- Waits for start/stop transitions to finish so reloads never collide with lingering JVMs.
+- Exposes helpers to restart Tomcat in debug mode on demand before VS Code attaches.
 
 ### Builder Service
 - Detects project structure (Maven / Gradle / local) and remembers explicit overrides.
@@ -57,6 +59,7 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 - Generates or updates `.vscode/launch.json` with a Java attach configuration.
 - Aligns the attach port with the current `turbocat.debugPort` setting.
 - Opens the resulting file on demand so developers can review or tweak settings.
+- Shares the default attach profile name with the extension so debug sessions can auto-start Tomcat in debug mode.
 
 ## Activation Flow
 1. `activate()` instantiates the services and registers commands.

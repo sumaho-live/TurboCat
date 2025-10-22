@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",

@@ -131,48 +131,60 @@ export class Tomcat {
     /**
      * Start Tomcat server
      */
-    public async start(showMessages: boolean = false): Promise<void> {
+    public async start(showMessages: boolean = false): Promise<boolean> {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
-        if (!tomcatHome || !javaHome) { return; }
+        if (!tomcatHome || !javaHome) { return false; }
 
         // Ensure Tomcat is stopped before starting
-        await this.ensureTomcatStopped(showMessages);
+        await this.ensureTomcatStopped(false);
 
         try {
-            this.lastStartMode = 'run';
             await this.executeTomcatCommand('start', tomcatHome, javaHome);
-            if (showMessages) {
-                logger.info('Tomcat started successfully', showMessages);
+            const started = await this.waitForServerState('running');
+            if (started) {
+                this.lastStartMode = 'run';
+                logger.success('Tomcat started successfully', showMessages);
+                return true;
             }
+
+            logger.warn('Tomcat start command completed, but the server did not begin listening in time.', showMessages);
+            return false;
         } catch (err) {
             logger.error('Failed to start Tomcat:', showMessages, err as string);
+            return false;
         }
     }
 
     /**
      * Start Tomcat in debug mode
      */
-    public async startDebug(showMessages: boolean = true): Promise<void> {
+    public async startDebug(showMessages: boolean = true): Promise<boolean> {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
-        if (!tomcatHome || !javaHome) { return; }
+        if (!tomcatHome || !javaHome) { return false; }
 
         // Ensure Tomcat is stopped before starting in debug mode
-        await this.ensureTomcatStopped(showMessages);
+        await this.ensureTomcatStopped(false);
 
         try {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
-            this.lastStartMode = 'debug';
             await this.executeTomcatCommand('start', tomcatHome, javaHome, {
                 debug: true,
                 debugPort
             });
-            if (showMessages) {
+            const started = await this.waitForServerState('running');
+            if (started) {
+                this.lastStartMode = 'debug';
                 logger.success(`Tomcat started in debug mode on port ${debugPort}`, showMessages);
+                return true;
             }
+
+            logger.warn('Tomcat debug start request timed out before the server began listening.', showMessages);
+            return false;
         } catch (err) {
             logger.error('Failed to start Tomcat in debug mode:', showMessages, err as string);
+            return false;
         }
     }
 
@@ -188,28 +200,53 @@ export class Tomcat {
      * 
      * @log Error if shutdown sequence fails
      */
-    public async stop(showMessages: boolean = false): Promise<void> {
+    public async stop(showMessages: boolean = false): Promise<boolean> {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
-        if (!tomcatHome || !javaHome) { return; }
+        if (!tomcatHome || !javaHome) { return false; }
 
         if (!await this.isTomcatRunning()) {
             logger.info('Tomcat is not running', showMessages);
-            return;
+            return false;
         }
 
         try {
             if (this.tomcatProcess) {
                 this.tomcatProcess.kill('SIGTERM');
                 this.tomcatProcess = null;
-                logger.success('Tomcat stopped (process terminated)', showMessages);
             } else {
                 await this.executeTomcatCommand('stop', tomcatHome, javaHome);
-                logger.success('Tomcat stopped successfully', showMessages);
             }
+
+            const stopped = await this.waitForServerState('stopped');
+            if (stopped) {
+                logger.success('Tomcat stopped successfully', showMessages);
+                return true;
+            }
+
+            logger.warn('Tomcat stop command completed, but the server is still shutting down.', showMessages);
+            return false;
         } catch (err) {
             logger.error('Failed to stop Tomcat:', showMessages, err as string);
+            return false;
         }
+    }
+
+    /**
+     * Ensure Tomcat is running in debug mode before attaching the debugger.
+     * Automatically restarts the server in debug mode when necessary.
+     */
+    public async ensureDebugModeActive(showMessages: boolean = false): Promise<boolean> {
+        const running = await this.isTomcatRunning();
+        if (running && this.lastStartMode === 'debug') {
+            return true;
+        }
+
+        if (running && this.lastStartMode !== 'debug') {
+            logger.info('Restarting Tomcat in debug mode for debugger attach...', showMessages);
+        }
+
+        return this.startDebug(showMessages);
     }
 
     /**
@@ -231,10 +268,12 @@ export class Tomcat {
 
         if (!wasRunning) {
             logger.info('Tomcat is not running, starting it...');
-            if (wasDebugMode) {
-                await this.startDebug(true);
-            } else {
-                await this.start(true);
+            const started = wasDebugMode
+                ? await this.startDebug(true)
+                : await this.start(true);
+
+            if (!started) {
+                logger.error('Tomcat reload failed: unable to start Tomcat.', true);
             }
             return;
         }
@@ -243,12 +282,14 @@ export class Tomcat {
             await this.ensureTomcatStopped(true);
             logger.clearOutput();
 
-            if (wasDebugMode) {
-                await this.startDebug(false);
-                logger.success('Tomcat reloaded in debug mode');
+            const restarted = wasDebugMode
+                ? await this.startDebug(false)
+                : await this.start(false);
+
+            if (restarted) {
+                logger.success(wasDebugMode ? 'Tomcat reloaded in debug mode' : 'Tomcat reloaded');
             } else {
-                await this.start(false);
-                logger.success('Tomcat reloaded');
+                logger.error('Tomcat reload failed: the server did not restart.', true);
             }
         } catch (err) {
             logger.error('Failed to reload Tomcat:', true, err as string);
@@ -329,6 +370,7 @@ export class Tomcat {
                 await execAsync(`pkill -f java`);
             }
         } catch { }
+        this.tomcatProcess = null;
     }
 
     /**
@@ -382,7 +424,7 @@ export class Tomcat {
             const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
             return lines.some(line =>
                 line.includes(`:${this.port}`) &&
-                /LISTENING/i.test(line)
+                /(LISTENING|LISTEN)/i.test(line)
             );
         } catch (error) {
             return false;
@@ -787,19 +829,44 @@ export class Tomcat {
      * @returns Promise resolving when Tomcat is confirmed stopped
      */
     private async ensureTomcatStopped(showMessages: boolean = false): Promise<void> {
-        if (await this.isTomcatRunning()) {
-            logger.info('Stopping Tomcat before operation...', showMessages);
-            await this.stop(showMessages);
-            // Add a small delay to ensure proper shutdown
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // If Tomcat is still running after stop, use kill as fallback
-            if (await this.isTomcatRunning()) {
-                logger.warn('Graceful shutdown failed, forcing termination...', showMessages);
-                await this.kill();
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
+        if (!await this.isTomcatRunning()) {
+            return;
         }
+
+        logger.info('Stopping Tomcat before operation...', showMessages);
+        const stoppedGracefully = await this.stop(showMessages);
+
+        if (stoppedGracefully || !await this.isTomcatRunning()) {
+            return;
+        }
+
+        logger.warn('Graceful shutdown failed, forcing termination...', showMessages);
+        await this.kill();
+        const forced = await this.waitForServerState('stopped', 5000);
+        if (!forced) {
+            logger.error('Forced termination failed; Tomcat may still be running.', showMessages);
+        } else if (showMessages) {
+            logger.success('Tomcat stopped after force termination', showMessages);
+        }
+    }
+
+    private async waitForServerState(
+        expected: 'running' | 'stopped',
+        timeoutMs: number = 10000,
+        pollInterval: number = 250
+    ): Promise<boolean> {
+        const deadline = Date.now() + timeoutMs;
+
+        while (Date.now() < deadline) {
+            const running = await this.isTomcatRunning();
+            if ((expected === 'running' && running) || (expected === 'stopped' && !running)) {
+                return true;
+            }
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+        }
+
+        const running = await this.isTomcatRunning();
+        return expected === 'running' ? running : !running;
     }
 
     private resolveDeployPathSetting(): string {

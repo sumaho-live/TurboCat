@@ -65,6 +65,34 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    const debugAttachProvider = vscode.debug.registerDebugConfigurationProvider('java', {
+        async resolveDebugConfiguration(_folder, debugConfiguration) {
+            const profileName = DebugProfile.getInstance().getAttachProfileName();
+            const isTurboCatAttach = typeof debugConfiguration?.name === 'string' &&
+                debugConfiguration.name === profileName &&
+                debugConfiguration.request === 'attach';
+
+            if (!isTurboCatAttach) {
+                return debugConfiguration;
+            }
+
+            try {
+                const prepared = await tomcat.ensureDebugModeActive(false);
+                if (!prepared) {
+                    Logger.getInstance().error('TurboCat: Failed to prepare Tomcat for debug attach.', true);
+                    return null;
+                }
+            } catch (error) {
+                const detail = error instanceof Error ? error : String(error);
+                Logger.getInstance().error('TurboCat: Failed to prepare Tomcat for debug attach.', true, detail);
+                return null;
+            }
+
+            return debugConfiguration;
+        }
+    });
+    context.subscriptions.push(debugAttachProvider);
+
     if (Builder.isJavaEEProject()) {
         Logger.getInstance().init();
 
