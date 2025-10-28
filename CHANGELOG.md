@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3]
+- Added the `turbocat.showSmartDeployLog` setting so Smart Deploy info/debug chatter can be hidden while still surfacing warnings and errors.
+- Normalised log prefixes to `[TurboCat][LEVEL]` and pushed verbose Smart Deploy output to debug level for a leaner deploy log.
+- Local deployments now run inside a progress notification with stage updates for resource sync, compilation, mappings, and library refreshes.
+- Documentation refreshed to cover the new logging behaviour and configuration option.
+
 ## [0.1.2]
 - Ensured stop/reload operations wait for Tomcat to terminate before restarting, preventing lingering processes from causing false "started" messages or reload failures.
 - When launching the default VS Code debug profile, TurboCat now restarts Tomcat in debug mode automatically if required.

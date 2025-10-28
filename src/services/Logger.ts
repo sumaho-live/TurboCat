@@ -8,6 +8,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 //import { Builder } from './Builder';
 
+type LogContext = 'general' | 'smartDeploy';
+
 export class Logger {
     private static instance: Logger;
     private tomcatHome: string;
@@ -23,6 +25,7 @@ export class Logger {
     private showTimestamp: boolean;
     private logEncoding: string;
     private autoShowOutput: boolean;
+    private showSmartDeployLog: boolean;
     private logLevels: { [key: string]: number } = {
         DEBUG: 0,
         INFO: 1,
@@ -45,6 +48,7 @@ export class Logger {
         }
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
         this.autoShowOutput = vscode.workspace.getConfiguration().get<boolean>('turbocat.autoShowOutput', true);
+        this.showSmartDeployLog = vscode.workspace.getConfiguration().get<boolean>('turbocat.showSmartDeployLog', true);
         
         // Single output channel for all logs
         this.outputChannel = vscode.window.createOutputChannel('TurboCat', 'log');
@@ -82,6 +86,7 @@ export class Logger {
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
         this.logEncoding = vscode.workspace.getConfiguration().get<string>('turbocat.logEncoding', 'utf8');
         this.autoShowOutput = vscode.workspace.getConfiguration().get<boolean>('turbocat.autoShowOutput', true);
+        this.showSmartDeployLog = vscode.workspace.getConfiguration().get<boolean>('turbocat.showSmartDeployLog', true);
     }
 
     /**
@@ -110,33 +115,33 @@ export class Logger {
     }
 
     /** Log info message */
-    public info(message: string, showToast: boolean = false): void {
-        this.log('INFO', message, showToast ? vscode.window.showInformationMessage : undefined);
+    public info(message: string, showToast: boolean = false, context: LogContext = 'general'): void {
+        this.log('INFO', message, showToast ? vscode.window.showInformationMessage : undefined, false, context);
     }
 
     /** Log success message */
-    public success(message: string, showToast: boolean = false): void {
-        this.log('SUCCESS', message, showToast ? vscode.window.showInformationMessage : undefined);
+    public success(message: string, showToast: boolean = false, context: LogContext = 'general'): void {
+        this.log('SUCCESS', message, showToast ? vscode.window.showInformationMessage : undefined, false, context);
     }
 
     /** Log debug message */
-    public debug(message: string, showToast: boolean = false): void {
-        this.log('DEBUG', message, showToast ? vscode.window.showInformationMessage : undefined);
+    public debug(message: string, showToast: boolean = false, context: LogContext = 'general'): void {
+        this.log('DEBUG', message, showToast ? vscode.window.showInformationMessage : undefined, false, context);
     }
 
     /** Log warning message */
-    public warn(message: string, showToast: boolean = false): void {
-        this.log('WARN', message, showToast ? vscode.window.showWarningMessage : undefined);
+    public warn(message: string, showToast: boolean = false, context: LogContext = 'general'): void {
+        this.log('WARN', message, showToast ? vscode.window.showWarningMessage : undefined, false, context);
     }
 
     /** Log error message */
-    public error(message: string, showToast: boolean = false, error?: Error | string): void {
+    public error(message: string, showToast: boolean = false, error?: Error | string, context: LogContext = 'general'): void {
         let errorMsg = '';
         if (error) {
             errorMsg = typeof error === 'string' ? error : error.stack || error.message;
         }
         const fullMessage = errorMsg ? `${message}\n${errorMsg}` : message;
-        this.log('ERROR', fullMessage, showToast ? vscode.window.showErrorMessage : undefined);
+        this.log('ERROR', fullMessage, showToast ? vscode.window.showErrorMessage : undefined, false, context);
     }
 
    
@@ -367,12 +372,19 @@ export class Logger {
         level: string,
         message: string,
         showUI?: (message: string) => Thenable<string | undefined>,
-        isTomcatLog: boolean = false
+        isTomcatLog: boolean = false,
+        context: LogContext = 'general'
     ): void {
         const messageLevel = level.toUpperCase();
         const messageLevelValue = this.logLevels[messageLevel] ?? this.logLevels.INFO;
         if (!isTomcatLog && messageLevelValue < this.logLevels[this.logLevel]) {
             return;
+        }
+
+        if (!isTomcatLog && !this.showSmartDeployLog && context === 'smartDeploy') {
+            if (messageLevelValue < this.logLevels.WARN) {
+                return;
+            }
         }
 
         let formattedMessage: string;
@@ -383,7 +395,7 @@ export class Logger {
         } else {
             // For extension logs, apply standard formatting
             const timestamp = this.showTimestamp ? `[${new Date().toLocaleString()}] ` : '';
-            formattedMessage = `${timestamp}【turbocat】[${messageLevel}] ${message}`;
+            formattedMessage = `${timestamp}[TurboCat][${messageLevel}] ${message}`;
         }
 
         // Determine which output channel to use
@@ -393,7 +405,7 @@ export class Logger {
             showUI(message).then(selection => {
                 if (selection) {
                     const timestamp = this.showTimestamp ? `[${new Date().toLocaleString()}] ` : '';
-                    this.outputChannel.appendLine(`${timestamp}【turbocat】[INFO] User selected: ${selection}`);
+                    this.outputChannel.appendLine(`${timestamp}[TurboCat][INFO] User selected: ${selection}`);
                 }
             });
         }

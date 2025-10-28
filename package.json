@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -173,6 +173,11 @@
           "type": "boolean",
           "default": true,
           "description": "Whether to automatically show the output panel when logs are written."
+        },
+        "turbocat.showSmartDeployLog": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show TurboCat smart deploy synchronization messages in the output panel."
         },
         "turbocat.syncBypassPatterns": {
           "type": "string",

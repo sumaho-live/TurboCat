@@ -45,7 +45,8 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 
 ### Logger Service
 - Maintains a single VS Code Output channel (`TurboCat`).
-- Prefixes extension logs with `【turbocat】[LEVEL]` while streaming Tomcat output untouched.
+- Prefixes extension logs with `[TurboCat][LEVEL]` while streaming Tomcat output untouched.
+- Respects `turbocat.showSmartDeployLog` to hide Smart Deploy info/debug output (warnings and errors still surface).
 - Watches the Tomcat `logs/` directory and tails new access logs without reformatting.
 - Exposes helper methods (`info`, `success`, `warn`, `error`, `appendRawLine`) used by other services.
 

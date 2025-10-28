@@ -32,6 +32,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
 | `turbocat.syncBypassPatterns` | Filename keywords to skip syncing | Comma-separated list, default catches “copy” variants |
+| `turbocat.showSmartDeployLog` | Toggle smart deploy info/debug logs | Defaults to true; set false to suppress automatic sync chatter |
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
@@ -76,8 +77,9 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 
 ## Logging
 - All output goes to a single VS Code Output channel named **TurboCat**.
-- Extension messages are prefixed with `【turbocat】[LEVEL]` and keep optional timestamps.
+- Extension messages are prefixed with `[TurboCat][LEVEL]` and keep optional timestamps.
 - Tomcat logs stream through untouched, including HTTP access logs—no more reformatting.
+- Set `turbocat.showSmartDeployLog` to `false` if you want to hide Smart Deploy chatter while keeping warnings and errors.
 
 ## Getting Help
 1. Open the **TurboCat** output channel for immediate diagnostics.
