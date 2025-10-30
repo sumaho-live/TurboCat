@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4]
+- Expanded Tomcat log decoding with iconv-lite, added more preset encodings, and introduced the `turbocat.logEncodingCustom` override for arbitrary encoding names (e.g. Shift_JIS, GBK) without garbled output.
+- Improved the stop command to send Tomcat's shutdown signal first and fall back to targeted process termination on Windows, eliminating lingering ports.
+- Added the `turbocat.shutdownPort` setting and server.xml synchronization so shutdown port changes apply on the next Tomcat start without restarting VS Code.
+- Updated documentation to cover the new log encoding controls and shutdown port configuration.
+
 ## [0.1.3]
 - Added the `turbocat.showSmartDeployLog` setting so Smart Deploy info/debug chatter can be hidden while still surfacing warnings and errors.
 - Normalised log prefixes to `[TurboCat][LEVEL]` and pushed verbose Smart Deploy output to debug level for a leaner deploy log.

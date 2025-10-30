@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import iconv from 'iconv-lite';
 //import { Builder } from './Builder';
 
 type LogContext = 'general' | 'smartDeploy';
@@ -18,7 +19,6 @@ export class Logger {
     private currentLogFile: string | null = null;
     private fileCheckInterval?: NodeJS.Timeout;
     private logWatchers: { file: string; listener: fs.StatsListener }[] = []; // Optimized for fewer active watchers
-    private accessLogStream?: fs.ReadStream;
     private accessLogWatcher?: fs.FSWatcher;
     private unifiedLogWatcher?: fs.FSWatcher; // Single watcher for log directory monitoring
     private logLevel: string;
@@ -26,6 +26,9 @@ export class Logger {
     private logEncoding: string;
     private autoShowOutput: boolean;
     private showSmartDeployLog: boolean;
+    private invalidEncodingWarned = false;
+    private accessLogOffsets: Map<string, number> = new Map();
+    private partialLines: Map<string, string> = new Map();
     private logLevels: { [key: string]: number } = {
         DEBUG: 0,
         INFO: 1,
@@ -53,7 +56,7 @@ export class Logger {
         // Single output channel for all logs
         this.outputChannel = vscode.window.createOutputChannel('TurboCat', 'log');
         
-        this.logEncoding = vscode.workspace.getConfiguration().get<string>('turbocat.logEncoding', 'utf8');
+        this.logEncoding = this.resolveLogEncoding();
     }
 
     /**
@@ -84,7 +87,13 @@ export class Logger {
             this.logLevel = 'INFO';
         }
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
-        this.logEncoding = vscode.workspace.getConfiguration().get<string>('turbocat.logEncoding', 'utf8');
+        const previousEncoding = this.logEncoding;
+        this.logEncoding = this.resolveLogEncoding();
+        if (previousEncoding !== this.logEncoding) {
+            this.invalidEncodingWarned = false;
+            this.partialLines.clear();
+            this.accessLogOffsets.clear();
+        }
         this.autoShowOutput = vscode.workspace.getConfiguration().get<boolean>('turbocat.autoShowOutput', true);
         this.showSmartDeployLog = vscode.workspace.getConfiguration().get<boolean>('turbocat.showSmartDeployLog', true);
     }
@@ -102,7 +111,6 @@ export class Logger {
             this.unifiedLogWatcher.close();
         }
         this.logWatchers.forEach(watcher => fs.unwatchFile(watcher.file, watcher.listener));
-        this.accessLogStream?.destroy();
         this.accessLogWatcher?.close();
     }
 
@@ -187,10 +195,8 @@ export class Logger {
         const logsDir = path.join(tomcatHome, 'logs');
         const accessLogPattern = /localhost_access_log\.\d{4}-\d{2}-\d{2}\.log/;
 
-        if (this.accessLogStream) {
-            this.accessLogStream.destroy();
-            this.accessLogWatcher?.close();
-        }
+        this.accessLogWatcher?.close();
+        this.accessLogWatcher = undefined;
 
         const files = await fs.promises.readdir(logsDir);
         const accessLogs = files.filter(f => accessLogPattern.test(f))
@@ -212,41 +218,33 @@ export class Logger {
             }
         });
 
-        this.accessLogStream = fs.createReadStream(logPath, {
-            encoding: this.logEncoding as BufferEncoding,
-            autoClose: false,
-            start: fs.existsSync(logPath) ? fs.statSync(logPath).size : 0
-        });
-
-        this.accessLogStream.on('data', (data) => {
-            const lines = data.toString().split('\n');
-            lines.forEach(line => {
-                if (line.trim()) {
-                    this.processAccessLogLine(line);
-                }
-            });
-        });
+        try {
+            const size = fs.statSync(logPath).size;
+            this.accessLogOffsets.set(logPath, size);
+            this.partialLines.set(logPath, '');
+        } catch {
+            this.accessLogOffsets.delete(logPath);
+            this.partialLines.delete(logPath);
+        }
     }
 
     /** Handle live log file updates */
     private handleLiveLogUpdate(logPath: string) {
-        const newSize = fs.statSync(logPath).size;
-        const oldSize = this.accessLogStream?.bytesRead || 0;
+        try {
+            const newSize = fs.statSync(logPath).size;
+            const oldSize = this.accessLogOffsets.get(logPath) ?? 0;
 
-        if (newSize > oldSize) {
-            const stream = fs.createReadStream(logPath, {
-                start: oldSize,
-                end: newSize - 1,
-                encoding: this.logEncoding as BufferEncoding
-            });
-
-            stream.on('data', data => {
-                data.toString().split('\n').forEach(line => {
-                    if (line.trim()) {
-                        this.processAccessLogLine(line);
-                    }
-                });
-            });
+            if (newSize > oldSize) {
+                this.tailFile(logPath, oldSize, newSize);
+                this.accessLogOffsets.set(logPath, newSize);
+            } else if (newSize < oldSize) {
+                // File was truncated (rotation) – reset cursors
+                this.accessLogOffsets.set(logPath, newSize);
+                this.partialLines.set(logPath, '');
+            }
+        } catch {
+            this.accessLogOffsets.delete(logPath);
+            this.partialLines.delete(logPath);
         }
     }
 
@@ -289,10 +287,15 @@ export class Logger {
      */
     private switchLogFile(newFile: string): void {
         // Dispose existing watchers - now more efficient with single watcher
-        this.logWatchers.forEach(({ file, listener }) => fs.unwatchFile(file, listener));
+        this.logWatchers.forEach(({ file, listener }) => {
+            fs.unwatchFile(file, listener);
+            this.partialLines.delete(file);
+            this.accessLogOffsets.delete(file);
+        });
         this.logWatchers = [];
 
         this.currentLogFile = newFile;
+        this.partialLines.set(newFile, '');
 
         fs.stat(newFile, (err) => {
             if (err) {
@@ -325,22 +328,92 @@ export class Logger {
      * @param currSize Current file size in bytes
      */
     private handleLogUpdate(filePath: string, prevSize: number, currSize: number): void {
+        this.tailFile(filePath, prevSize, currSize);
+    }
+
+    private tailFile(filePath: string, start: number, end: number): void {
+        if (end <= start) {
+            return;
+        }
+
         const stream = fs.createReadStream(filePath, {
-            start: prevSize,
-            end: currSize - 1,
-            encoding: this.logEncoding as BufferEncoding
+            start,
+            end: end - 1
         });
 
-        let buffer = '';
-        stream.on('data', chunk => buffer += chunk);
-        stream.on('end', () => {
-            let lines = buffer.split('\n').filter(line => line.trim());
-            lines.forEach((line) => {
-                if (line.trim()) {
-                    this.processAccessLogLine(line);
-                }
-            });
+        const buffers: Buffer[] = [];
+        stream.on('data', chunk => {
+            if (Buffer.isBuffer(chunk)) {
+                buffers.push(chunk);
+            } else {
+                buffers.push(Buffer.from(chunk));
+            }
         });
+
+        stream.on('end', () => {
+            if (!buffers.length) {
+                return;
+            }
+            this.processLogBuffer(filePath, Buffer.concat(buffers));
+        });
+
+        stream.on('error', (error) => {
+            this.warn(`Failed to read log updates from ${filePath}: ${(error as Error).message}`);
+        });
+    }
+
+    private processLogBuffer(filePath: string, buffer: Buffer): void {
+        const decoded = this.decodeBuffer(buffer);
+        this.processDecodedLines(filePath, decoded);
+    }
+
+    private decodeBuffer(buffer: Buffer): string {
+        const encoding = this.logEncoding;
+        try {
+            if (iconv.encodingExists(encoding)) {
+                this.invalidEncodingWarned = false;
+                return iconv.decode(buffer, encoding);
+            }
+
+            if (!this.invalidEncodingWarned) {
+                this.warn(`Encoding '${encoding}' is not recognized. Falling back to UTF-8.`, false);
+                this.invalidEncodingWarned = true;
+            }
+        } catch (error) {
+            if (!this.invalidEncodingWarned) {
+                this.warn(`Failed to decode log chunk with encoding '${encoding}'. Falling back to UTF-8.`, false);
+                this.invalidEncodingWarned = true;
+            }
+        }
+
+        return buffer.toString('utf8');
+    }
+
+    private processDecodedLines(filePath: string, decoded: string): void {
+        const previous = this.partialLines.get(filePath) ?? '';
+        const combined = previous + decoded;
+        const lines = combined.split(/\r?\n/);
+
+        const hasTrailingNewline = /(\r?\n)$/.test(combined);
+        const remainder = hasTrailingNewline ? '' : (lines.pop() ?? '');
+        this.partialLines.set(filePath, remainder);
+
+        for (const raw of lines) {
+            const line = raw.replace(/\r$/, '');
+            if (line.trim().length > 0) {
+                this.processAccessLogLine(line);
+            }
+        }
+    }
+
+    private resolveLogEncoding(): string {
+        const config = vscode.workspace.getConfiguration();
+        const custom = (config.get<string>('turbocat.logEncodingCustom', '') ?? '').trim();
+        if (custom) {
+            return custom;
+        }
+
+        return config.get<string>('turbocat.logEncoding', 'utf8');
     }
 
     /**

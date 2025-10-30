@@ -15,6 +15,7 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 
 ## Daily Workflow
 - `TurboCat: Start` – boots Tomcat (debug mode available via `TurboCat: Start in Debug Mode`).
+- `TurboCat: Stop` – sends Tomcat's shutdown command first and force-terminates lingering JVMs when needed.
 - `TurboCat: Deploy` – detects Maven/Gradle/local layouts and keeps Tomcat in sync with the matching deployment pipeline.
 - `TurboCat: Clean` – removes the active webapp deployment and its cached work/temp artifacts.
 - `TurboCat: Reload` – reloads the active context or restarts when necessary, waiting for Tomcat to shut down cleanly before coming back up.
@@ -29,10 +30,12 @@ All settings live under the `turbocat.*` namespace. Key options:
 | --- | --- | --- |
 | `turbocat.home` / `turbocat.javaHome` | Optional overrides for discovery | Prompted on first launch if left blank |
 | `turbocat.port` / `turbocat.debugPort` | Server & debug ports | Validated and written back to Tomcat configuration |
+| `turbocat.shutdownPort` | Tomcat shutdown socket | Must differ from the HTTP port; updates server.xml and restarts on demand |
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
 | `turbocat.syncBypassPatterns` | Filename keywords to skip syncing | Comma-separated list, default catches “copy” variants |
 | `turbocat.showSmartDeployLog` | Toggle smart deploy info/debug logs | Defaults to true; set false to suppress automatic sync chatter |
+| `turbocat.logEncoding` / `turbocat.logEncodingCustom` | Tomcat log decoding | Pick common encodings or enter any iconv-lite name (e.g. `shift_jis`) for accurate output |
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
@@ -79,6 +82,7 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 - All output goes to a single VS Code Output channel named **TurboCat**.
 - Extension messages are prefixed with `[TurboCat][LEVEL]` and keep optional timestamps.
 - Tomcat logs stream through untouched, including HTTP access logs—no more reformatting.
+- Adjust `turbocat.logEncoding` or `turbocat.logEncodingCustom` when Tomcat writes logs in encodings such as Shift_JIS or GBK.
 - Set `turbocat.showSmartDeployLog` to `false` if you want to hide Smart Deploy chatter while keeping warnings and errors.
 
 ## Getting Help

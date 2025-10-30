@@ -10,6 +10,7 @@ import { Tomcat } from '../services/Tomcat';
 import { Logger } from '../services/Logger';
 import { Toolbar } from '../services/Toolbar';
 import { DebugProfile } from '../services/DebugProfile';
+import iconv from 'iconv-lite';
 
 /**
  * Extension activation - initializes services and registers commands
@@ -139,7 +140,8 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         Builder.getInstance().updateConfig();
         Toolbar.getInstance().updateConfig();
 
-    } else if (event.affectsConfiguration('turbocat.port') || 
+    } else if (event.affectsConfiguration('turbocat.port') ||
+        event.affectsConfiguration('turbocat.shutdownPort') ||
         event.affectsConfiguration('turbocat.debugPort')) {
         Tomcat.getInstance().updateConfig();
         Tomcat.getInstance().updatePort();
@@ -170,14 +172,23 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         event.affectsConfiguration('turbocat.autoShowOutput')) {
         Logger.getInstance().updateConfig();
         
-    } else if (event.affectsConfiguration('turbocat.logEncoding')) {
-        const configured = vscode.workspace.getConfiguration().get<string>('turbocat.logEncoding', 'utf8');
-        try {
-            Buffer.from('test', configured as BufferEncoding);
-        } catch (e) {
-            Logger.getInstance().warn(`Unsupported encoding '${configured}' detected. Falling back to utf8.`);
-            vscode.workspace.getConfiguration().update('turbocat.logEncoding', 'utf8', true);
+    } else if (event.affectsConfiguration('turbocat.logEncoding') ||
+        event.affectsConfiguration('turbocat.logEncodingCustom')) {
+        const configuration = vscode.workspace.getConfiguration();
+        const custom = (configuration.get<string>('turbocat.logEncodingCustom', '') ?? '').trim();
+        let effective = custom || configuration.get<string>('turbocat.logEncoding', 'utf8');
+
+        if (effective && !iconv.encodingExists(effective)) {
+            Logger.getInstance().warn(`Unsupported encoding '${effective}' detected. Falling back to utf8.`);
+            if (custom) {
+                configuration.update('turbocat.logEncodingCustom', '', true);
+                effective = configuration.get<string>('turbocat.logEncoding', 'utf8');
+            } else {
+                configuration.update('turbocat.logEncoding', 'utf8', true);
+                effective = 'utf8';
+            }
         }
+
         Logger.getInstance().updateConfig();
     } else if (event.affectsConfiguration('turbocat.compileEncoding')) {
         Builder.getInstance().updateConfig();

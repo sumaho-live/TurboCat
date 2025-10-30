@@ -11,6 +11,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { Logger } from './Logger';
 import { ChildProcess, spawn } from 'child_process';
+import * as net from 'net';
+import iconv from 'iconv-lite';
 
 const execAsync = promisify(exec);
 const logger = Logger.getInstance();
@@ -20,6 +22,7 @@ export class Tomcat {
     private tomcatHome: string;
     private javaHome: string;
     private port: number;
+    private shutdownPort: number;
     private tomcatProcess: ChildProcess | null = null;
     private currentAppName: string = '';
     private tomcatEnvironment: Record<string, string>;
@@ -35,6 +38,7 @@ export class Tomcat {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
+        this.shutdownPort = vscode.workspace.getConfiguration().get<number>('turbocat.shutdownPort', 8005);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
         this.lastStartMode = 'run';
         this.deployPath = this.resolveDeployPathSetting();
@@ -65,6 +69,7 @@ export class Tomcat {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
+        this.shutdownPort = vscode.workspace.getConfiguration().get<number>('turbocat.shutdownPort', 8005);
         this.tomcatEnvironment = this.loadTomcatEnvironment();
         this.deployPath = this.resolveDeployPathSetting();
         if (previousDeployPath !== this.deployPath) {
@@ -211,20 +216,30 @@ export class Tomcat {
         }
 
         try {
-            if (this.tomcatProcess) {
-                this.tomcatProcess.kill('SIGTERM');
-                this.tomcatProcess = null;
-            } else {
-                await this.executeTomcatCommand('stop', tomcatHome, javaHome);
+            const shutdownSent = await this.sendShutdownSignal(tomcatHome);
+            if (!shutdownSent) {
+                if (this.tomcatProcess && !this.tomcatProcess.killed) {
+                    await this.terminateSpawnedProcess();
+                } else {
+                    await this.executeTomcatCommand('stop', tomcatHome, javaHome);
+                }
             }
 
-            const stopped = await this.waitForServerState('stopped');
+            const stopped = await this.waitForServerState('stopped', 15000);
             if (stopped) {
                 logger.success('Tomcat stopped successfully', showMessages);
                 return true;
             }
 
-            logger.warn('Tomcat stop command completed, but the server is still shutting down.', showMessages);
+            logger.warn('Graceful stop timed out, attempting forced termination...', showMessages);
+            await this.kill();
+            const forced = await this.waitForServerState('stopped', 5000);
+            if (forced) {
+                logger.success('Tomcat stopped after force termination', showMessages);
+                return true;
+            }
+
+            logger.error('Tomcat could not be terminated and may still be running.', showMessages);
             return false;
         } catch (err) {
             logger.error('Failed to stop Tomcat:', showMessages, err as string);
@@ -373,6 +388,103 @@ export class Tomcat {
         this.tomcatProcess = null;
     }
 
+    private async terminateSpawnedProcess(): Promise<void> {
+        if (!this.tomcatProcess) {
+            return;
+        }
+
+        const pid = this.tomcatProcess.pid;
+        const childRef = this.tomcatProcess;
+        this.tomcatProcess = null;
+
+        if (process.platform === 'win32' && pid) {
+            try {
+                await execAsync(`taskkill /T /PID ${pid}`);
+            } catch {
+                await execAsync(`taskkill /F /PID ${pid}`).catch(() => undefined);
+            }
+        } else {
+            try {
+                childRef.kill('SIGTERM');
+            } catch {
+                try {
+                    childRef.kill();
+                } catch {
+                    // Ignore failures; force termination handled elsewhere
+                }
+            }
+        }
+    }
+
+    private async sendShutdownSignal(tomcatHome: string): Promise<boolean> {
+        if (!this.shutdownPort || this.shutdownPort <= 0) {
+            return false;
+        }
+
+        const serverXmlPath = path.join(tomcatHome, 'conf', 'server.xml');
+        let shutdownCommand = 'SHUTDOWN';
+        try {
+            const xml = await fsp.readFile(serverXmlPath, 'utf8');
+            const shutdownMatch = xml.match(/<Server\b[^>]*shutdown="([^"]+)"/i);
+            if (shutdownMatch?.[1]) {
+                shutdownCommand = shutdownMatch[1];
+            }
+        } catch {
+            // Ignore; fall back to default shutdown command
+        }
+
+        const attempt = (host: string): Promise<boolean> => {
+            return new Promise<boolean>((resolve) => {
+                let settled = false;
+                let hadError = false;
+
+                const finish = (result: boolean) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    socket.removeAllListeners();
+                    resolve(result);
+                };
+
+                const socket = net.createConnection(
+                    {
+                        host,
+                        port: this.shutdownPort
+                    },
+                    () => {
+                        socket.write(shutdownCommand);
+                        socket.end();
+                    }
+                );
+
+                socket.setTimeout(5000, () => {
+                    hadError = true;
+                    socket.destroy();
+                });
+
+                socket.once('error', () => {
+                    hadError = true;
+                    finish(false);
+                });
+
+                socket.once('close', () => {
+                    finish(!hadError);
+                });
+            });
+        };
+
+        const hosts = ['127.0.0.1', '::1'];
+        for (const host of hosts) {
+            const success = await attempt(host);
+            if (success) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Public method to check if Tomcat is running
      * 
@@ -411,24 +523,16 @@ export class Tomcat {
         if (this.tomcatProcess && !this.tomcatProcess.killed) {
             return true;
         }
-        try {
-            let command: string;
 
-            if (process.platform === 'win32') {
-                command = `netstat -ano | findstr ":${this.port}"`;
-            } else {
-                command = `netstat -an | grep ":${this.port}"`;
-            }
-
-            const { stdout } = await execAsync(command);
-            const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-            return lines.some(line =>
-                line.includes(`:${this.port}`) &&
-                /(LISTENING|LISTEN)/i.test(line)
-            );
-        } catch (error) {
-            return false;
+        if (await this.isPortListening(this.port)) {
+            return true;
         }
+
+        if (this.shutdownPort > 0 && await this.isPortListening(this.shutdownPort)) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -588,36 +692,77 @@ export class Tomcat {
     public async updatePort(): Promise<void> {
         const config = vscode.workspace.getConfiguration();
         const newPort = config.get<number>('turbocat.port', 8080);
+        const newShutdownPort = config.get<number>('turbocat.shutdownPort', 8005);
         const oldPort = this.port;
+        const oldShutdownPort = this.shutdownPort;
 
-        if (newPort !== oldPort) {
-            try {
-                const javaHome = await this.findJavaHome();
-                const tomcatHome = await this.findTomcatHome();
-                if (!javaHome || !tomcatHome) { return; }
-
-                await this.validatePort(newPort);
-                await new Promise(resolve => setTimeout(resolve, 200));
-
-                // Ensure Tomcat is stopped before updating port configuration
-                await this.ensureTomcatStopped(true);
-
-                await this.modifyServerXmlPort(tomcatHome, newPort);
-
-                this.port = newPort;
-                this.updateConfig();
-                Tomcat.getInstance().updateConfig();
-
-                await vscode.workspace.getConfiguration().update('turbocat.port', newPort, true);
-                logger.success(`Tomcat port updated from ${oldPort} to ${newPort}`, true);
-
-                this.executeTomcatCommand('start', tomcatHome, javaHome);
-            } catch (err) {
-                await vscode.workspace.getConfiguration().update('turbocat.port', oldPort, true);
-                logger.error('Failed to update Tomcat port:', true, err as string);
-            }
+        if (newPort === oldPort && newShutdownPort === oldShutdownPort) {
+            return;
         }
 
+        try {
+            const javaHome = await this.findJavaHome();
+            const tomcatHome = await this.findTomcatHome();
+            if (!javaHome || !tomcatHome) { return; }
+
+            await this.validatePort(newPort);
+            await this.validatePort(newShutdownPort);
+
+            if (newPort === newShutdownPort && newShutdownPort > 0) {
+                throw new Error('HTTP port and shutdown port must be different.');
+            }
+
+            const wasRunning = await this.isTomcatRunning();
+            await this.ensureTomcatStopped(true);
+
+            await this.modifyServerXmlPorts(tomcatHome, {
+                http: newPort,
+                shutdown: newShutdownPort
+            });
+
+            this.port = newPort;
+            this.shutdownPort = newShutdownPort;
+
+            logger.success(
+                `Updated Tomcat ports (HTTP: ${oldPort} → ${newPort}, Shutdown: ${oldShutdownPort} → ${newShutdownPort})`,
+                true
+            );
+
+            if (wasRunning) {
+                try {
+                    await this.executeTomcatCommand('start', tomcatHome, javaHome);
+                } catch (startError) {
+                    logger.error('Tomcat failed to restart after port change:', true, startError as string);
+                }
+            }
+        } catch (err) {
+            this.port = oldPort;
+            this.shutdownPort = oldShutdownPort;
+            await config.update('turbocat.port', oldPort, true);
+            await config.update('turbocat.shutdownPort', oldShutdownPort, true);
+            logger.error('Failed to update Tomcat port configuration:', true, err as string);
+        }
+    }
+
+    private async isPortListening(port: number): Promise<boolean> {
+        if (port <= 0) {
+            return false;
+        }
+
+        try {
+            const command = process.platform === 'win32'
+                ? `netstat -ano | findstr ":${port}"`
+                : `netstat -an | grep ":${port}"`;
+
+            const { stdout } = await execAsync(command);
+            const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+            return lines.some(line =>
+                line.includes(`:${port}`) &&
+                /(LISTENING|LISTEN)/i.test(line)
+            );
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -633,31 +778,20 @@ export class Tomcat {
      * @throws Error with validation failure details
      */
     private async validatePort(port: number): Promise<void> {
+        if (port <= 0) {
+            return;
+        }
+
         if (port < this.PORT_RANGE.min) {
-            throw new Error(
-                `Ports below ${this.PORT_RANGE.min} require admin privileges`
-            );
+            throw new Error(`Ports below ${this.PORT_RANGE.min} require admin privileges`);
         }
 
         if (port > this.PORT_RANGE.max) {
-            throw new Error(
-                `Maximum allowed port is ${this.PORT_RANGE.max}`
-            );
+            throw new Error(`Maximum allowed port is ${this.PORT_RANGE.max}`);
         }
 
-        try {
-            let command: string;
-
-            if (process.platform === 'win32') {
-                command = `netstat -an | findstr ":${port}"`;
-            } else {
-                command = `netstat -an | grep ":${port}"`;
-            }
-
-            const { stdout } = await execAsync(command);
-            if (stdout.includes(`:${port}`)) { throw new Error(`Port ${port} is already in use`); }
-        } catch (error) {
-            return;
+        if (await this.isPortListening(port)) {
+            throw new Error(`Port ${port} is already in use`);
         }
     }
 
@@ -674,17 +808,45 @@ export class Tomcat {
      * @param newPort Port number to configure
      * @throws Error if file operations fail
      */
-    private async modifyServerXmlPort(tomcatHome: string, newPort: number): Promise<void> {
+    private async modifyServerXmlPorts(tomcatHome: string, ports: { http: number; shutdown: number }): Promise<void> {
         const serverXmlPath = path.join(tomcatHome, 'conf', 'server.xml');
         const content = await fsp.readFile(serverXmlPath, 'utf8');
 
-        const updatedContent = content.replace(
-            /(port=")\d+(".*protocol="HTTP\/1\.1")/,
-            `$1${newPort}$2`
+        let updatedContent = content.replace(
+            /(<Server\b[^>]*port=")\d+(")/i,
+            `$1${ports.shutdown}$2`
         );
 
-        if (!updatedContent.includes(`port="${newPort}"`)) {
-            throw new Error('Failed to update port in server.xml');
+        if (updatedContent === content) {
+            throw new Error('Failed to update shutdown port in server.xml');
+        }
+
+        let httpConnectorUpdated = false;
+        updatedContent = updatedContent.replace(/<Connector\b[^>]*>/gi, (tag) => {
+            if (httpConnectorUpdated) {
+                return tag;
+            }
+
+            const isAJP = /protocol\s*=\s*".*AJP/i.test(tag);
+            if (isAJP) {
+                return tag;
+            }
+
+            const isHttp = /protocol\s*=\s*".*http/i.test(tag) || !/protocol\s*=\s*"/i.test(tag);
+            if (!isHttp) {
+                return tag;
+            }
+
+            if (!/port\s*=\s*"\d+"/i.test(tag)) {
+                return tag;
+            }
+
+            httpConnectorUpdated = true;
+            return tag.replace(/port\s*=\s*"\d+"/i, `port="${ports.http}"`);
+        });
+
+        if (!httpConnectorUpdated) {
+            throw new Error('Failed to locate HTTP connector in server.xml');
         }
 
         await fsp.writeFile(serverXmlPath, updatedContent);
@@ -725,24 +887,45 @@ export class Tomcat {
             });
             this.tomcatProcess = child;
 
-            child.stdout.setEncoding(logEncoding as BufferEncoding);
-            child.stderr.setEncoding(logEncoding as BufferEncoding);
-
             let stdoutBuffer = '';
             let stderrBuffer = '';
+            const resolvedEncoding = iconv.encodingExists(logEncoding) ? logEncoding : 'utf8';
+
+            const decode = (data: Buffer | string): string => {
+                const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                try {
+                    return iconv.decode(buffer, resolvedEncoding);
+                } catch {
+                    return buffer.toString('utf8');
+                }
+            };
 
             child.stdout.on('data', (data) => {
-                stdoutBuffer += data;
+                stdoutBuffer += decode(data);
                 const lines = stdoutBuffer.split(/\r?\n/);
                 stdoutBuffer = lines.pop() || '';
                 lines.forEach(line => logger.appendRawLine(line));
             });
 
             child.stderr.on('data', (data) => {
-                stderrBuffer += data;
+                stderrBuffer += decode(data);
                 const lines = stderrBuffer.split(/\r?\n/);
                 stderrBuffer = lines.pop() || '';
                 lines.forEach(line => logger.appendRawLine(line));
+            });
+
+            child.stdout.on('end', () => {
+                if (stdoutBuffer.trim()) {
+                    logger.appendRawLine(stdoutBuffer);
+                }
+                stdoutBuffer = '';
+            });
+
+            child.stderr.on('end', () => {
+                if (stderrBuffer.trim()) {
+                    logger.appendRawLine(stderrBuffer);
+                }
+                stderrBuffer = '';
             });
 
             return new Promise((resolve, reject) => {

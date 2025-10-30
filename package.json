@@ -131,19 +131,36 @@
           "default": "utf8",
           "enum": [
             "utf8",
-            "ascii",
             "utf-8",
             "utf16le",
             "utf-16le",
             "ucs2",
             "ucs-2",
+            "ascii",
+            "latin1",
+            "iso-8859-1",
+            "shift_jis",
+            "shift-jis",
+            "sjis",
+            "cp932",
+            "ms932",
+            "windows-31j",
+            "euc-jp",
+            "iso-2022-jp",
+            "gbk",
+            "gb2312",
+            "big5",
             "base64",
             "base64url",
-            "latin1",
             "binary",
             "hex"
           ],
-          "description": "Encoding for Tomcat logs. This setting is used to read the logs and should match the encoding used by Tomcat. If you are unsure, use 'utf8'."
+          "markdownDescription": "Encoding for Tomcat logs. Choose a common encoding from the list or set `turbocat.logEncodingCustom` to override with any encoding supported by iconv-lite. If you are unsure, use `utf8`."
+        },
+        "turbocat.logEncodingCustom": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional override for Tomcat log encoding. Leave empty to use `turbocat.logEncoding`. Provide any encoding name supported by iconv-lite, such as `windows-1252`, `gb18030`, or `shift_jis`."
         },
         "turbocat.compileEncoding": {
           "type": "string",
@@ -244,6 +261,14 @@
           "errorMessage": "Port must be between 1024-49151",
           "description": "The port number for the Tomcat server, allowed range is 1024-49151."
         },
+        "turbocat.shutdownPort": {
+          "type": "number",
+          "default": 8005,
+          "minimum": 1024,
+          "maximum": 65535,
+          "errorMessage": "Shutdown port must be between 1024-65535",
+          "markdownDescription": "The Tomcat shutdown port used for receiving the shutdown command. Must differ from `turbocat.port`. Set the Tomcat `server.xml` port to -1 manually if you need to disable the shutdown listener."
+        },
         "turbocat.home": {
           "type": "string",
           "default": "",
@@ -297,6 +322,7 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "glob": "^11.0.1"
+    "glob": "^11.0.1",
+    "iconv-lite": "^0.6.3"
   }
 }
