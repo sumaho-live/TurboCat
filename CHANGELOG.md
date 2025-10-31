@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1]
+- Added the `turbocat.tomcatDebugEnvironment` setting so debug launches can inject dedicated environment variables without affecting normal starts.
+- Updated the Tomcat service to respect the appropriate environment for start/stop flows and documented the new configuration option.
+
 ## [0.1.4]
 - Expanded Tomcat log decoding with iconv-lite, added more preset encodings, and introduced the `turbocat.logEncodingCustom` override for arbitrary encoding names (e.g. Shift_JIS, GBK) without garbled output.
 - Improved the stop command to send Tomcat's shutdown signal first and fall back to targeted process termination on Windows, eliminating lingering ports.

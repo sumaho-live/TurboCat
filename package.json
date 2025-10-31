@@ -2,12 +2,12 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
     "name": "Awei",
-    "url": "https://github.com/sumaho-live/TurboCat"
+    "url": "https://github.com/sumaho-live"
   },
   "icon": "resources/tomcat-logo.png",
   "repository": {
@@ -286,6 +286,12 @@
           "default": {},
           "scope": "machine",
           "markdownDescription": "Environment variables to apply when launching Tomcat. Use this to add custom JVM parameters, for example:\n```json\n{\n  \"JAVA_TOOL_OPTIONS\": \"-Djava.awt.headless=true\"\n}\n```"
+        },
+        "turbocat.tomcatDebugEnvironment": {
+          "type": "object",
+          "default": {},
+          "scope": "machine",
+          "markdownDescription": "Environment variables to apply when launching Tomcat in debug mode. Use this to override or extend debug-specific JVM parameters without affecting normal starts."
         }
       }
     }

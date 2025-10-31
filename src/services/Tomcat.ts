@@ -26,6 +26,7 @@ export class Tomcat {
     private tomcatProcess: ChildProcess | null = null;
     private currentAppName: string = '';
     private tomcatEnvironment: Record<string, string>;
+    private tomcatDebugEnvironment: Record<string, string>;
     private lastStartMode: 'run' | 'debug';
     private deployPath: string;
 
@@ -39,7 +40,8 @@ export class Tomcat {
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.shutdownPort = vscode.workspace.getConfiguration().get<number>('turbocat.shutdownPort', 8005);
-        this.tomcatEnvironment = this.loadTomcatEnvironment();
+        this.tomcatEnvironment = this.loadTomcatEnvironment('turbocat.tomcatEnvironment');
+        this.tomcatDebugEnvironment = this.loadTomcatEnvironment('turbocat.tomcatDebugEnvironment');
         this.lastStartMode = 'run';
         this.deployPath = this.resolveDeployPathSetting();
     }
@@ -70,15 +72,16 @@ export class Tomcat {
         this.javaHome = vscode.workspace.getConfiguration().get<string>('turbocat.javaHome', '');
         this.port = vscode.workspace.getConfiguration().get<number>('turbocat.port', 8080);
         this.shutdownPort = vscode.workspace.getConfiguration().get<number>('turbocat.shutdownPort', 8005);
-        this.tomcatEnvironment = this.loadTomcatEnvironment();
+        this.tomcatEnvironment = this.loadTomcatEnvironment('turbocat.tomcatEnvironment');
+        this.tomcatDebugEnvironment = this.loadTomcatEnvironment('turbocat.tomcatDebugEnvironment');
         this.deployPath = this.resolveDeployPathSetting();
         if (previousDeployPath !== this.deployPath) {
             this.currentAppName = '';
         }
     }
 
-    private loadTomcatEnvironment(): Record<string, string> {
-        const configured = vscode.workspace.getConfiguration().get<Record<string, unknown>>('turbocat.tomcatEnvironment', {});
+    private loadTomcatEnvironment(settingKey: string): Record<string, string> {
+        const configured = vscode.workspace.getConfiguration().get<Record<string, unknown>>(settingKey, {});
         if (!configured || typeof configured !== 'object') {
             return {};
         }
@@ -145,7 +148,9 @@ export class Tomcat {
         await this.ensureTomcatStopped(false);
 
         try {
-            await this.executeTomcatCommand('start', tomcatHome, javaHome);
+            await this.executeTomcatCommand('start', tomcatHome, javaHome, {
+                environment: this.tomcatEnvironment
+            });
             const started = await this.waitForServerState('running');
             if (started) {
                 this.lastStartMode = 'run';
@@ -176,7 +181,8 @@ export class Tomcat {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
             await this.executeTomcatCommand('start', tomcatHome, javaHome, {
                 debug: true,
-                debugPort
+                debugPort,
+                environment: this.tomcatDebugEnvironment
             });
             const started = await this.waitForServerState('running');
             if (started) {
@@ -221,7 +227,10 @@ export class Tomcat {
                 if (this.tomcatProcess && !this.tomcatProcess.killed) {
                     await this.terminateSpawnedProcess();
                 } else {
-                    await this.executeTomcatCommand('stop', tomcatHome, javaHome);
+                    const environment = this.lastStartMode === 'debug'
+                        ? this.tomcatDebugEnvironment
+                        : this.tomcatEnvironment;
+                    await this.executeTomcatCommand('stop', tomcatHome, javaHome, { environment });
                 }
             }
 
@@ -871,8 +880,10 @@ export class Tomcat {
         action: 'start' | 'stop',
         tomcatHome: string,
         javaHome: string,
-        options?: { debug?: boolean, debugPort?: number }
+        options?: { debug?: boolean, debugPort?: number, environment?: Record<string, string> }
     ): Promise<void> {
+        const environment = options?.environment ?? this.tomcatEnvironment;
+
         if (action === 'start') {
             const logEncoding = logger.getLogEncoding();
             const { command, args } = this.buildCommand(action, tomcatHome, javaHome, options);
@@ -882,7 +893,7 @@ export class Tomcat {
                 shell: process.platform === 'win32',
                 env: {
                     ...process.env,
-                    ...this.tomcatEnvironment
+                    ...environment
                 }
             });
             this.tomcatProcess = child;
@@ -949,7 +960,7 @@ export class Tomcat {
             await execAsync(stopCommand, {
                 env: {
                     ...process.env,
-                    ...this.tomcatEnvironment
+                    ...environment
                 }
             });
         }

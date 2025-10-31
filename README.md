@@ -39,6 +39,8 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
+| `turbocat.tomcatEnvironment` | Environment variables for standard starts | JSON object of key/value pairs applied to normal `TurboCat: Start` runs |
+| `turbocat.tomcatDebugEnvironment` | Debug-only environment overrides | Applied exclusively to `TurboCat: Start in Debug Mode`, leaving normal starts untouched |
 
 ## Project Types
 TurboCat autodetects common Java web structures:
@@ -77,6 +79,7 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 ## Java Debugging
 - Run **`TurboCat: Generate Java Debug Profile`** to create or refresh `.vscode/launch.json` with the correct attach configuration.
 - Launch the generated **“Attach to Tomcat (TurboCat)”** configuration from VS Code’s Run and Debug panel. TurboCat now checks Tomcat’s status and, when needed, restarts it in debug mode automatically before VS Code attaches.
+- Use `turbocat.tomcatDebugEnvironment` for debug-only JVM flags (e.g. enabling remote monitors) while keeping `turbocat.tomcatEnvironment` reserved for standard starts.
 
 ## Logging
 - All output goes to a single VS Code Output channel named **TurboCat**.

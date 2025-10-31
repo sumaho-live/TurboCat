@@ -156,7 +156,8 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         }
         Toolbar.getInstance().updateConfig();
 
-    } else if (event.affectsConfiguration('turbocat.tomcatEnvironment')) {
+    } else if (event.affectsConfiguration('turbocat.tomcatEnvironment') ||
+        event.affectsConfiguration('turbocat.tomcatDebugEnvironment')) {
         Tomcat.getInstance().updateConfig();
 
     } else if (event.affectsConfiguration('turbocat.deployPath')) {
