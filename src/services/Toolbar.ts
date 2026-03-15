@@ -92,7 +92,7 @@ export class Toolbar {
         
         // Start polling for server status
         this.updateServerStatus();
-        this.updateInterval = setInterval(() => this.updateServerStatus(), 3000);
+        this.updateInterval = setInterval(() => this.updateServerStatus(), 5000);
         
         Logger.getInstance().info("Tomcat toolbar initialized");
     }    /**

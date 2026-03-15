@@ -16,9 +16,7 @@ export class Logger {
     private tomcatHome: string;
     private outputChannel: vscode.OutputChannel;
     private statusBarItem?: vscode.StatusBarItem;
-    private currentLogFile: string | null = null;
-    private fileCheckInterval?: NodeJS.Timeout;
-    private logWatchers: { file: string; listener: fs.StatsListener }[] = []; // Optimized for fewer active watchers
+
     private accessLogWatcher?: fs.FSWatcher;
     private unifiedLogWatcher?: fs.FSWatcher; // Single watcher for log directory monitoring
     private logLevel: string;
@@ -104,13 +102,9 @@ export class Logger {
     public deactivate(): void {
         this.outputChannel.dispose();
         this.statusBarItem?.dispose();
-        if (this.fileCheckInterval) {
-            clearInterval(this.fileCheckInterval);
-        }
         if (this.unifiedLogWatcher) {
             this.unifiedLogWatcher.close();
         }
-        this.logWatchers.forEach(watcher => fs.unwatchFile(watcher.file, watcher.listener));
         this.accessLogWatcher?.close();
     }
 
@@ -163,9 +157,10 @@ export class Logger {
 
         const logsDir = path.join(this.tomcatHome, 'logs');
         
-        // Use a single directory watcher instead of polling interval + multiple file watchers
-        this.setupUnifiedLogWatcher(logsDir);
+        // Single real-time watcher for current log file
         this.watchAccessLogDirectly(this.tomcatHome);
+        // Lightweight directory watcher for log rotation detection only
+        this.setupLogRotationWatcher(logsDir);
     }
 
     /**
@@ -253,83 +248,10 @@ export class Logger {
         this.appendRawLine(rawLine);
     }
 
-    /** Check for new log files due to rotation */
-    private checkForNewLogFile(logsDir: string): void {
-        fs.readdir(logsDir, (err, files) => {
-            if (err) {
-                return;
-            }
 
-            const logFiles = files
-                .filter(file => file.startsWith('localhost_access_log.'))
-                .sort((a, b) => this.extractDate(b) - this.extractDate(a));
 
-            if (logFiles.length === 0) {
-                return;
-            }
 
-            const latestFile = path.join(logsDir, logFiles[0]);
-            if (latestFile !== this.currentLogFile) {
-                this.switchLogFile(latestFile);
-            }
-        });
-    }
 
-    /**
-     * Active log file switcher (Optimized)
-     * 
-     * Uses single file watcher instead of multiple watchers:
-     * 1. Disposes previous single watcher efficiently
-     * 2. Sets up new single file watcher for the current log
-     * 3. Maintains consistent monitoring with reduced overhead
-     * 
-     * @param newFile Path to new log file to monitor
-     */
-    private switchLogFile(newFile: string): void {
-        // Dispose existing watchers - now more efficient with single watcher
-        this.logWatchers.forEach(({ file, listener }) => {
-            fs.unwatchFile(file, listener);
-            this.partialLines.delete(file);
-            this.accessLogOffsets.delete(file);
-        });
-        this.logWatchers = [];
-
-        this.currentLogFile = newFile;
-        this.partialLines.set(newFile, '');
-
-        fs.stat(newFile, (err) => {
-            if (err) {
-                return;
-            }
-
-            // Create single optimized file watcher
-            const listener: fs.StatsListener = (curr, prev) => {
-                if (curr.size > prev.size) {
-                    this.handleLogUpdate(newFile, prev.size, curr.size);
-                }
-            };
-
-            fs.watchFile(newFile, { interval: 1000 }, listener);
-            this.logWatchers.push({ file: newFile, listener });
-        });
-    }
-
-    /**
-     * Log update handler
-     * 
-     * Processes new log entries with:
-     * - Delta change detection
-     * - Stream-based partial reading
-     * - Log line sanitization
-     * - HTTP event extraction
-     * 
-     * @param filePath Path to modified log file
-     * @param prevSize Previous file size in bytes
-     * @param currSize Current file size in bytes
-     */
-    private handleLogUpdate(filePath: string, prevSize: number, currSize: number): void {
-        this.tailFile(filePath, prevSize, currSize);
-    }
 
     private tailFile(filePath: string, start: number, end: number): void {
         if (end <= start) {
@@ -416,22 +338,7 @@ export class Logger {
         return config.get<string>('turbocat.logEncoding', 'utf8');
     }
 
-    /**
-     * Log filename date extractor
-     * 
-     * Parses timestamp from log filenames for:
-     * - Chronological sorting
-     * - Rotation pattern detection
-     * - File version comparison
-     * - Temporal correlation
-     * 
-     * @param filename Access log filename
-     * @returns Parsed timestamp in milliseconds
-     */
-    private extractDate(filename: string): number {
-        const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
-        return dateMatch ? Date.parse(dateMatch[1]) : 0;
-    }
+
 
     /**
      * Core logging mechanism (modified).
@@ -490,48 +397,23 @@ export class Logger {
     }
 
     /**
-     * Setup unified log directory watcher (New)
-     * 
-     * Replaces polling-based log rotation detection with:
-     * - Single filesystem watcher on logs directory
-     * - Event-driven log file creation/modification detection
-     * - Automatic log rotation handling
-     * - Reduced resource usage compared to interval polling
-     * 
-     * @param logsDir Path to Tomcat logs directory
+     * Lightweight directory watcher for log rotation detection.
+     * Only detects when new log files appear and re-attaches the real-time watcher.
      */
-    private setupUnifiedLogWatcher(logsDir: string): void {
-        // Dispose existing interval-based checking
-        if (this.fileCheckInterval) {
-            clearInterval(this.fileCheckInterval);
-            this.fileCheckInterval = undefined;
-        }
-
-        // Dispose existing unified watcher if any
+    private setupLogRotationWatcher(logsDir: string): void {
         if (this.unifiedLogWatcher) {
             this.unifiedLogWatcher.close();
         }
 
-        // Create single directory watcher for log rotation detection
         try {
             this.unifiedLogWatcher = fs.watch(logsDir, (eventType, filename) => {
-                // Only respond to log file changes
-                if (filename && filename.startsWith('localhost_access_log.')) {
-                    if (eventType === 'rename' || eventType === 'change') {
-                        // Log rotation or new content detected
-                        this.checkForNewLogFile(logsDir);
-                    }
+                if (filename && filename.startsWith('localhost_access_log.') && eventType === 'rename') {
+                    // New log file detected (rotation) - re-attach real-time watcher
+                    this.watchAccessLogDirectly(this.tomcatHome);
                 }
             });
-            
-            // Initial check for existing log files
-            this.checkForNewLogFile(logsDir);
-            
-        } catch (error) {
-            // Fallback to polling if directory watching fails
-            this.fileCheckInterval = setInterval(() => {
-                this.checkForNewLogFile(logsDir);
-            }, 1000); // Increased interval since it's a fallback
+        } catch {
+            // Directory watching not available - gracefully degrade
         }
     }
 }

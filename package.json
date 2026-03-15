@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with smart file synchronization for Java web projects",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -41,8 +41,14 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "workspaceContains:**/*"
+    "workspaceContains:**/pom.xml",
+    "workspaceContains:**/build.gradle",
+    "workspaceContains:**/build.gradle.kts",
+    "workspaceContains:**/WEB-INF/web.xml",
+    "workspaceContains:.classpath",
+    "onCommand:turbocat.deploy",
+    "onCommand:turbocat.start",
+    "onCommand:turbocat.stop"
   ],
   "engines": {
     "vscode": "^1.56.0",
@@ -120,6 +126,10 @@
       {
         "command": "turbocat.generateDebugProfile",
         "title": "TurboCat: Generate Java Debug Profile"
+      },
+      {
+        "command": "turbocat.reload",
+        "title": "TurboCat: Reload Application"
       }
     ],
     "menus": {},

@@ -30,7 +30,7 @@ export class Tomcat {
     private lastStartMode: 'run' | 'debug';
     private deployPath: string;
 
-    private readonly PORT_RANGE = { min: 1024, max: 65535 };
+    private readonly PORT_RANGE = { min: 1024, max: 49151 };
 
     /**
      * Private constructor - initialize configuration
@@ -59,8 +59,8 @@ export class Tomcat {
     /**
      * Clean up resources on extension deactivation
      */
-    public deactivate(): void {
-        this.stop();
+    public async deactivate(): Promise<void> {
+        await this.stop(false).catch(() => undefined);
     }
 
     /**
@@ -386,14 +386,47 @@ export class Tomcat {
      */
     public async kill(): Promise<void> {
         try {
-            if (process.platform === 'win32') {
-                await execAsync(`taskkill /F /IM java.exe`);
-                await execAsync(`taskkill /F /IM javaw.exe`);
-            } else {
-                await execAsync(`pkill -f tomcat`);
-                await execAsync(`pkill -f java`);
+            // Priority 1: Kill the tracked child process by PID
+            if (this.tomcatProcess && this.tomcatProcess.pid) {
+                const pid = this.tomcatProcess.pid;
+                if (process.platform === 'win32') {
+                    await execAsync(`taskkill /F /T /PID ${pid}`).catch(() => undefined);
+                } else {
+                    try {
+                        process.kill(-pid, 'SIGKILL');
+                    } catch {
+                        await execAsync(`kill -9 ${pid}`).catch(() => undefined);
+                    }
+                }
+                this.tomcatProcess = null;
+                return;
             }
-        } catch { }
+
+            // Priority 2: Kill only the process listening on the configured port
+            if (process.platform === 'win32') {
+                const { stdout } = await execAsync(
+                    `netstat -ano | findstr ":${this.port}" | findstr "LISTENING"`
+                ).catch(() => ({ stdout: '' }));
+                const pids = [...new Set(
+                    stdout.split(/\r?\n/)
+                        .map(line => line.trim().split(/\s+/).pop())
+                        .filter((p): p is string => !!p && /^\d+$/.test(p))
+                )];
+                for (const pid of pids) {
+                    await execAsync(`taskkill /F /PID ${pid}`).catch(() => undefined);
+                }
+            } else {
+                const { stdout } = await execAsync(
+                    `lsof -ti :${this.port}`
+                ).catch(() => ({ stdout: '' }));
+                const pids = stdout.trim().split(/\s+/).filter(Boolean);
+                for (const pid of pids) {
+                    await execAsync(`kill -9 ${pid}`).catch(() => undefined);
+                }
+            }
+        } catch {
+            logger.debug('No processes found to terminate');
+        }
         this.tomcatProcess = null;
     }
 
@@ -566,8 +599,8 @@ export class Tomcat {
             vscode.workspace.getConfiguration().get<string>('turbocat.home')
         ];
 
-        const validCandidate = candidates.find(path =>
-            typeof path === 'string' && path.trim().length > 0
+        const validCandidate = candidates.find(candidate =>
+            typeof candidate === 'string' && candidate.trim().length > 0
         );
 
         if (validCandidate && await this.validateTomcatHome(validCandidate)) {
@@ -623,8 +656,8 @@ export class Tomcat {
             process.env.JAVA_JDK_HOME
         ];
 
-        const validCandidate = candidates.find(path =>
-            typeof path === 'string' && path.trim().length > 0
+        const validCandidate = candidates.find(candidate =>
+            typeof candidate === 'string' && candidate.trim().length > 0
         );
 
         if (validCandidate && await this.validateJavaHome(validCandidate)) {
@@ -939,20 +972,24 @@ export class Tomcat {
                 stderrBuffer = '';
             });
 
-            return new Promise((resolve, reject) => {
-                child.on('close', (code, signal) => {
-                    this.tomcatProcess = null;
-                    if (code === 0 || code === 143 || signal === 'SIGTERM') {
-                        resolve();
-                    } else {
-                        reject(new Error(`Start failed with code ${code}`));
-                    }
-                });
+            // Register cleanup handler for when process eventually exits
+            child.on('close', () => {
+                this.tomcatProcess = null;
+            });
 
-                child.on('error', (err) => {
+            // Only catch immediate startup failures (e.g. binary not found)
+            return new Promise<void>((resolve, reject) => {
+                const onError = (err: Error) => {
                     this.tomcatProcess = null;
                     reject(err);
-                });
+                };
+                child.on('error', onError);
+
+                // Allow a brief window for immediate errors, then resolve
+                setTimeout(() => {
+                    child.removeListener('error', onError);
+                    resolve();
+                }, 500);
             });
         } else {
             const { command, args } = this.buildCommand(action, tomcatHome, javaHome);

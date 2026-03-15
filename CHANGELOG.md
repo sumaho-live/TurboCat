@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2]
+### Fixed
+- **Critical**: `Tomcat.kill()` no longer terminates all Java processes; now only kills the tracked PID or the process on the configured port.
+- **Critical**: Removed global `editor.tokenColorCustomizations` mutation from `syntax.ts`; syntax coloring should use `configurationDefaults` instead.
+- **Critical**: Added missing `await` on recursive `deploy()` call preventing race conditions during retry.
+- **Critical**: Fixed `executeTomcatCommand` Promise semantics so `start` resolves after launch instead of waiting for process exit.
+- **Critical**: Replaced regex-based `stripJsonComments` with a character-level parser that respects string literals.
+- Fixed dual log monitoring conflict in Logger by consolidating to a single real-time watcher with rotation detection.
+- Changed `updateSettings` from `else-if` chain to independent `if` blocks so simultaneous config changes are all processed.
+- Increased Toolbar server status polling interval from 3s to 5s and added early exit for non-Java projects.
+- Simplified Java file change handling from 6 redundant scans to a single delayed check; removed unreliable time-based dependency analysis.
+- Added `return` after `reject()` in `executeCommand` to prevent resolve-after-reject.
+- Added error logging to `copyDirectorySync` and `brutalSync` instead of silently swallowing errors.
+- Improved Maven `artifactId` extraction to exclude `<parent>`, `<dependencies>`, and `<plugins>` blocks.
+- Reduced excessive debug logging in `findMatchingMapping` from ~10 lines per call to 2.
+- Changed module-level singleton instantiation to lazy getters to avoid initialization order issues.
+- Made `deactivate()` async and properly awaits Tomcat shutdown.
+
+### Changed
+- Narrowed `activationEvents` to Java EE project markers (`pom.xml`, `build.gradle`, etc.) instead of matching all workspaces.
+- Unified `tsconfig.json` `outDir` to `out` to match webpack output.
+- Standardized on `pnpm` as the sole package manager; removed `package-lock.json`.
+- Unified port range max to 49151 to match `package.json` constraint.
+- 'Local' build option is now always available alongside Maven/Gradle.
+- Declared `turbocat.reload` command in `package.json` for command palette discoverability.
+
+### Removed
+- Deleted `Builder.ts.backup` from source tree.
+- Cleaned up compiled test artifacts (`.js`, `.js.map`) from `src/test/suite/`.
+- Removed unused fields (`staticResourceDebouncer`, `compiledFileDebouncer`) and commented-out legacy code.
+
 ## [1.0.1]
 - Added the `turbocat.tomcatDebugEnvironment` setting so debug launches can inject dedicated environment variables without affecting normal starts.
 - Updated the Tomcat service to respect the appropriate environment for start/stop flows and documented the new configuration option.

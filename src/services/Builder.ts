@@ -65,14 +65,14 @@ interface MavenConfig {
 /**
  * Smart deployment mapping configuration
  */
-const tomcat = Tomcat.getInstance();
-const logger = Logger.getInstance();
+const getTomcat = () => Tomcat.getInstance();
+const getLogger = () => Logger.getInstance();
 const smartLog = {
-    info: (message: string) => logger.info(message, false, 'smartDeploy'),
-    success: (message: string) => logger.success(message, false, 'smartDeploy'),
-    debug: (message: string) => logger.debug(message, false, 'smartDeploy'),
-    warn: (message: string) => logger.warn(message, false, 'smartDeploy'),
-    error: (message: string, detail?: Error | string) => logger.error(message, false, detail, 'smartDeploy')
+    info: (message: string) => getLogger().info(message, false, 'smartDeploy'),
+    success: (message: string) => getLogger().success(message, false, 'smartDeploy'),
+    debug: (message: string) => getLogger().debug(message, false, 'smartDeploy'),
+    warn: (message: string) => getLogger().warn(message, false, 'smartDeploy'),
+    error: (message: string, detail?: Error | string) => getLogger().error(message, false, detail, 'smartDeploy')
 };
 
 interface ProjectStructure {
@@ -520,10 +520,8 @@ export class Builder {
     
     // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
     private fileWatchers: vscode.FileSystemWatcher[] = []; // Contains both static and compiled file watchers
-    private staticResourceDebouncer = new Map<string, NodeJS.Timeout>(); // For static resources (immediate)
     
     // Batch processing for compiled files
-    private compiledFileDebouncer = new Map<string, NodeJS.Timeout>(); // Individual file debouncer (legacy)
     private batchDeploymentTimer?: NodeJS.Timeout; // Global batch timer
     private pendingCompiledFiles = new Set<string>(); // Files waiting for batch deployment
     
@@ -533,8 +531,7 @@ export class Builder {
     private compileEncoding: string;
     private defaultSmartDeployWebappName?: string;
 
-    // Legacy code (commented out for new implementation)
-    // private deployDebouncer = new Map<string, NodeJS.Timeout>();
+
 
     // Configuration file name (legacy, kept for reference)
     private static readonly CONFIG_FILE = '.vscode/tomcat-smart-deploy.json';
@@ -618,7 +615,7 @@ export class Builder {
      * Resolve the effective web application name using the workspace configuration override.
      */
     private resolveWebappName(defaultName?: string): string {
-        const override = tomcat.getConfiguredDeploymentPath();
+        const override = getTomcat().getConfiguredDeploymentPath();
         if (override) {
             return override;
         }
@@ -649,7 +646,7 @@ export class Builder {
 
         const isSafe = /^[\w.\-]+$/i.test(value);
         if (!isSafe) {
-            logger.warn(`Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`);
+            getLogger().warn(`Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`);
             return 'UTF-8';
         }
 
@@ -788,7 +785,12 @@ export class Builder {
         try {
             const pomPath = path.join(workspaceRoot, 'pom.xml');
             const pomContent = fs.readFileSync(pomPath, 'utf-8');
-            const artifactIdMatch = pomContent.match(/<artifactId>(.*?)<\/artifactId>/);
+            // Strip blocks that contain nested <artifactId> to avoid false matches
+            const stripped = pomContent
+                .replace(/<parent>[\s\S]*?<\/parent>/g, '')
+                .replace(/<dependencies>[\s\S]*?<\/dependencies>/g, '')
+                .replace(/<plugins>[\s\S]*?<\/plugins>/g, '');
+            const artifactIdMatch = stripped.match(/<artifactId>(.*?)<\/artifactId>/);
             return artifactIdMatch ? artifactIdMatch[1] : null;
         } catch {
             return null;
@@ -838,19 +840,19 @@ export class Builder {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (message !== Builder.DEPLOY_CANCELLED) {
-                logger.error('Deployment aborted:', false, message);
+                getLogger().error('Deployment aborted:', false, message);
             } else {
-                logger.info('Deployment cancelled by user');
+                getLogger().info('Deployment cancelled by user');
             }
             return;
         }
 
-        logger.info(`Using ${buildType} deployment pipeline`);
+        getLogger().info(`Using ${buildType} deployment pipeline`);
 
         try {
             this.projectStructure = this.detectProjectStructure();
         } catch (error) {
-            logger.warn('Unable to refresh project structure before deployment');
+            getLogger().warn('Unable to refresh project structure before deployment');
             if (error) {
                 smartLog.debug(`Project structure detection error: ${error}`);
             }
@@ -861,9 +863,9 @@ export class Builder {
         if (this.projectStructure) {
             this.projectStructure.webappName = appName;
         }
-        const tomcatHome = await tomcat.findTomcatHome();
+        const tomcatHome = await getTomcat().findTomcatHome();
         
-        tomcat.setAppName(appName);
+        getTomcat().setAppName(appName);
 
         if (!tomcatHome || !appName || !fs.existsSync(path.join(tomcatHome, 'webapps'))) { return; }
 
@@ -899,9 +901,9 @@ export class Builder {
             const duration = Math.round(endTime - startTime);
 
             if (fs.existsSync(targetDir)) {
-                logger.success(`${buildType} build completed in ${duration}ms`, true);
+                getLogger().success(`${buildType} build completed in ${duration}ms`, true);
                 await new Promise(resolve => setTimeout(resolve, 100));
-                await tomcat.reload();
+                await getTomcat().reload();
             }
 
             this.attempts = 0;
@@ -910,14 +912,14 @@ export class Builder {
             const isBusyError = errorMessage.includes('EBUSY') || errorMessage.includes('resource busy or locked');
             if (isBusyError && this.attempts < 3) {
                 this.attempts++;
-                await tomcat.kill();
-                this.deploy(buildType);
+                await getTomcat().stop(false);
+                await this.deploy(buildType);
             } else {
-                logger.error(`${buildType} build failed:`, true, errorMessage);
+                getLogger().error(`${buildType} build failed:`, true, errorMessage);
             }
-            //logger.defaultStatusBar();
+            //getLogger().defaultStatusBar();
         } finally {
-            //logger.defaultStatusBar();
+            //getLogger().defaultStatusBar();
         }
     }
 
@@ -971,7 +973,7 @@ export class Builder {
     }
 
     private collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle'> {
-        const candidates: Array<'Local' | 'Maven' | 'Gradle'> = [];
+        const candidates: Array<'Local' | 'Maven' | 'Gradle'> = ['Local'];
         const hasPom = fs.existsSync(path.join(projectDir, 'pom.xml'));
         const hasGradle = fs.existsSync(path.join(projectDir, 'build.gradle')) ||
             fs.existsSync(path.join(projectDir, 'build.gradle.kts'));
@@ -982,10 +984,6 @@ export class Builder {
 
         if (hasGradle) {
             candidates.push('Gradle');
-        }
-
-        if (candidates.length === 0) {
-            candidates.push('Local');
         }
 
         return candidates;
@@ -1297,7 +1295,6 @@ export class Builder {
 
     /**
      * Handle Java source file changes by checking for corresponding compiled files
-     * Enhanced version with comprehensive dependency analysis
      */
     private async handleJavaFileChange(javaFilePath: string, _eventType: 'change' | 'create' | 'delete'): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -1308,188 +1305,20 @@ export class Builder {
         const fileName = path.basename(javaFilePath, '.java');
         const relativePath = path.relative(workspaceRoot, javaFilePath);
         smartLog.debug(`Java source ${fileName}.java changed (${relativePath})`);
-        smartLog.debug(`Analyzing compilation impact for: ${fileName}.java`);
 
-        // Strategy 1: Immediate check for existing compiled files
-        this.checkAndDeployCompiledClass(javaFilePath, fileName);
-
-        // Strategy 2: Monitor for compilation completion with multiple attempts
-        this.monitorCompilationCompletion(javaFilePath, fileName);
-
-        // Strategy 3: Set up a delayed comprehensive scan
+        // Single delayed check - wait for compilation to complete
+        const debounceMs = vscode.workspace.getConfiguration('turbocat')
+            .get<number>('smartDeployDebounce', 300);
         setTimeout(async () => {
             try {
-                await this.performComprehensiveClassScan(javaFilePath, fileName);
+                await this.checkAndDeployCompiledClass(javaFilePath, fileName);
             } catch (error) {
-                smartLog.debug(`Comprehensive scan failed for ${fileName}.java: ${error}`);
+                smartLog.debug(`Compilation check failed for ${fileName}.java: ${error}`);
             }
-        }, 3000); // 3 second delay for comprehensive scan
+        }, Math.max(debounceMs, 500));
     }
 
-    /**
-     * Monitor compilation completion with multiple check attempts
-     */
-    private monitorCompilationCompletion(javaFilePath: string, className: string): void {
-        const attempts = [500, 1000, 1500, 2500]; // Multiple time intervals
-        
-        attempts.forEach((delay, index) => {
-            setTimeout(async () => {
-                smartLog.debug(`Compilation check attempt ${index + 1}/${attempts.length} for ${className}.java`);
-                try {
-                    await this.checkAndDeployCompiledClass(javaFilePath, className);
-                } catch (error) {
-                    smartLog.debug(`Compilation check ${index + 1} failed for ${className}.java: ${error}`);
-                }
-            }, delay);
-        });
-    }
 
-    /**
-     * Perform comprehensive class file scan to catch any missed dependencies
-     */
-    private async performComprehensiveClassScan(javaFilePath: string, className: string): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) {
-            return;
-        }
-
-        const outputDirs = this.resolveCompiledOutputDirectories();
-        const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
-
-        if (!existingOutputDirs.length) {
-            return;
-        }
-
-        try {
-            smartLog.debug(`🔍 Performing comprehensive scan for ${className}.java`);
-
-            const allPossibleMatchesSet = new Set<string>();
-            for (const outputDir of existingOutputDirs) {
-                const matches = await this.findAllPossibleClassMatches(outputDir, className, javaFilePath);
-                matches.forEach(match => allPossibleMatchesSet.add(match));
-            }
-
-            const allPossibleMatches = Array.from(allPossibleMatchesSet);
-
-            if (allPossibleMatches.length > 0) {
-                smartLog.debug(`Comprehensive scan found ${allPossibleMatches.length} additional classes for ${className}.java`);
-                
-                for (const classFile of allPossibleMatches) {
-                    const relativePath = path.relative(workspaceRoot, classFile);
-                    smartLog.debug(`   + ${relativePath}`);
-                    this.addToBatchDeployment(classFile, 'change');
-                }
-            }
-
-        } catch (error) {
-            smartLog.debug(`Comprehensive scan error: ${error}`);
-        }
-    }
-
-    /**
-     * Find all possible class file matches using multiple strategies
-     */
-    private async findAllPossibleClassMatches(outputDir: string, className: string, javaFilePath: string): Promise<string[]> {
-        const allMatches = new Set<string>();
-
-        try {
-            // Strategy 1: Pattern-based matching (more aggressive)
-            const patterns = [
-                `${outputDir}/**/${className}.class`,
-                `${outputDir}/**/${className}$*.class`,
-                `${outputDir}/**/*${className}*.class` // Even more aggressive - catches edge cases
-            ];
-
-            for (const pattern of patterns) {
-                const files = await glob(pattern);
-                files.forEach(file => allMatches.add(file));
-            }
-
-            // Strategy 2: Package-based analysis
-            const packagePath = this.extractPackagePath(javaFilePath);
-            if (packagePath) {
-                const packageDir = path.join(outputDir, packagePath);
-                if (fs.existsSync(packageDir)) {
-                    // Find classes with recent modification times in the same package
-                    const packageClasses = await glob(`${packageDir}/*.class`);
-                    const recentThreshold = Date.now() - 10000; // 10 seconds
-                    
-                    for (const classFile of packageClasses) {
-                        try {
-                            const stats = fs.statSync(classFile);
-                            if (stats.mtime.getTime() > recentThreshold) {
-                                allMatches.add(classFile);
-                            }
-                        } catch (error) {
-                            // Ignore errors
-                        }
-                    }
-                }
-            }
-
-            // Strategy 3: Dependency analysis (basic)
-            // Look for classes that might import or reference this class
-            await this.findDependentClasses(outputDir, className, allMatches);
-
-        } catch (error) {
-            smartLog.debug(`Error in comprehensive class matching: ${error}`);
-        }
-
-        return Array.from(allMatches);
-    }
-
-    /**
-     * Extract package path from Java file
-     */
-    private extractPackagePath(javaFilePath: string): string | null {
-        try {
-            const javaContent = fs.readFileSync(javaFilePath, 'utf-8');
-            const packageMatch = javaContent.match(/package\s+([\w.]+)\s*;/);
-            
-            if (packageMatch) {
-                return packageMatch[1].replace(/\./g, path.sep);
-            }
-        } catch (error) {
-            smartLog.debug(`Failed to extract package from ${javaFilePath}: ${error}`);
-        }
-        
-        return null;
-    }
-
-    /**
-     * Find classes that might depend on the changed class
-     */
-    private async findDependentClasses(outputDir: string, className: string, matches: Set<string>): Promise<void> {
-        // This is a simplified dependency check
-        // In a more sophisticated implementation, we could analyze bytecode or use compilation dependency graphs
-        
-        try {
-            // For now, we'll use a time-based heuristic
-            const allClassFiles = await glob(`${outputDir}/**/*.class`);
-            const recentThreshold = Date.now() - 15000; // 15 seconds for dependency detection
-            
-            let dependentCount = 0;
-            for (const classFile of allClassFiles) {
-                try {
-                    const stats = fs.statSync(classFile);
-                    if (stats.mtime.getTime() > recentThreshold && !matches.has(classFile)) {
-                        // This class was recently modified, might be dependent
-                        matches.add(classFile);
-                        dependentCount++;
-                    }
-                } catch (error) {
-                    // Ignore errors
-                }
-            }
-            
-            if (dependentCount > 0) {
-                smartLog.debug(`Found ${dependentCount} potentially dependent classes for ${className}`);
-            }
-            
-        } catch (error) {
-            smartLog.debug(`Error finding dependent classes: ${error}`);
-        }
-    }
 
     /**
      * Check for compiled .class files and deploy them
@@ -1762,7 +1591,7 @@ export class Builder {
             await this.copyFileWithLogging(filePath, targetPath, 'static');
             
             const fileName = path.basename(filePath);
-            const tomcatHome = await tomcat.findTomcatHome();
+            const tomcatHome = await getTomcat().findTomcatHome();
             const relativePath = tomcatHome ? path.relative(path.join(tomcatHome, 'webapps'), targetPath) : path.basename(targetPath);
             smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
             
@@ -1842,7 +1671,7 @@ export class Builder {
     // private deployCompiledFileWithDelay(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
     //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
     //     
-    //     logger.debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+    //     getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
     //     
     //     if (this.compiledFileDebouncer.has(filePath)) {
     //         clearTimeout(this.compiledFileDebouncer.get(filePath)!);
@@ -1852,7 +1681,7 @@ export class Builder {
     //         try {
     //             await this.executeCompiledFileDeployment(filePath, eventType);
     //         } catch (error) {
-    //             logger.error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
+    //             getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
     //         } finally {
     //             this.compiledFileDebouncer.delete(filePath);
     //         }
@@ -1886,7 +1715,7 @@ export class Builder {
         await this.copyFileWithLogging(filePath, targetPath, 'class');
         
         const fileName = path.basename(filePath);
-        const tomcatHome = await tomcat.findTomcatHome();
+        const tomcatHome = await getTomcat().findTomcatHome();
         const relativePath = tomcatHome ? path.relative(path.join(tomcatHome, 'webapps'), targetPath) : path.basename(targetPath);
         smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
     }
@@ -1896,7 +1725,7 @@ export class Builder {
     //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
     //     
     //     // Debug log to verify configuration is being read correctly
-    //     logger.debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+    //     getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
     //     
     //     if (this.deployDebouncer.has(filePath)) {
     //         clearTimeout(this.deployDebouncer.get(filePath)!);
@@ -1906,7 +1735,7 @@ export class Builder {
     //         try {
     //             await deployFn();
     //         } catch (error) {
-    //             logger.error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
+    //             getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
     //         } finally {
     //             this.deployDebouncer.delete(filePath);
     //         }
@@ -1974,14 +1803,6 @@ export class Builder {
     public disposeSmartDeploy(): void {
         this.disposeFileWatchers();
         
-        // Clear any pending debounced operations for static resources
-        this.staticResourceDebouncer.forEach(timeout => clearTimeout(timeout));
-        this.staticResourceDebouncer.clear();
-        
-        // Clear individual compiled file debouncers (legacy)
-        this.compiledFileDebouncer.forEach(timeout => clearTimeout(timeout));
-        this.compiledFileDebouncer.clear();
-        
         // Clear batch deployment timer and pending files
         if (this.batchDeploymentTimer) {
             clearTimeout(this.batchDeploymentTimer);
@@ -1989,7 +1810,7 @@ export class Builder {
         }
         this.pendingCompiledFiles.clear();
         
-        smartLog.debug('🧹 Smart deploy cleanup: All watchers and timers disposed');
+        smartLog.debug('Smart deploy cleanup: All watchers and timers disposed');
     }
 
     /**
@@ -2087,7 +1908,7 @@ export class Builder {
                     type: 'maven',
                     archetype: 'maven-archetype-webapp'
                 });
-                logger.info('New Maven web app project created');
+                getLogger().info('New Maven web app project created');
             } catch (err) {
                 vscode.window.showErrorMessage(
                     'Project creation failed. Ensure Java Extension Pack is installed and configured.',
@@ -2099,7 +1920,7 @@ export class Builder {
                 });
             }
         } else {
-            logger.success('Tomcat deploy canceled', true);
+            getLogger().success('Tomcat deploy canceled', true);
         }
     }
 
@@ -2137,7 +1958,7 @@ export class Builder {
         if (!webAppPath) {
             throw new Error(`Web resource directory not found. Checked: ${webResourceCandidates.join(', ')}`);
         }
-        const javaHome = await tomcat.findJavaHome();
+        const javaHome = await getTomcat().findJavaHome();
         if (!javaHome) {
             return;
         }
@@ -2242,7 +2063,7 @@ export class Builder {
             return;
         }
 
-        const tomcatHome = await tomcat.findTomcatHome();
+        const tomcatHome = await getTomcat().findTomcatHome();
         if (!tomcatHome) {
             return;
         }
@@ -2445,6 +2266,7 @@ export class Builder {
             exec(command, { cwd }, (err, stdout, stderr) => {
                 if (err) {
                     reject(stdout || stderr || err.message || 'Unknown error.');
+                    return;
                 }
                 resolve();
             });
@@ -2497,12 +2319,20 @@ export class Builder {
             const srcPath = path.join(src, entry.name);
             const destPath = path.join(dest, entry.name);
     
-            try { fs.rmSync(destPath, { force: true, recursive: true }); } catch(e) {}
+            try {
+                fs.rmSync(destPath, { force: true, recursive: true });
+            } catch (e) {
+                smartLog.debug(`Failed to remove ${destPath}: ${e}`);
+            }
     
             if (entry.isDirectory()) {
                 this.copyDirectorySync(srcPath, destPath);
             } else {
-                try { fs.copyFileSync(srcPath, destPath); } catch(e) {}
+                try {
+                    fs.copyFileSync(srcPath, destPath);
+                } catch (e) {
+                    smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
+                }
             }
         }
     }
@@ -2543,7 +2373,11 @@ export class Builder {
             fs.readdirSync(dest).forEach(f => {
                 const fullPath = path.join(dest, f);
                 if (!keepers.has(f) && (!restricted ? true : !restrictedFolders.includes(f))) {
-                    try { fs.rmSync(fullPath, { force: true, recursive: true }); } catch (e) {}
+                    try {
+                        fs.rmSync(fullPath, { force: true, recursive: true });
+                    } catch (e) {
+                        smartLog.debug(`Failed to clean ${fullPath}: ${e}`);
+                    }
                 }
             });
         }
@@ -2917,52 +2751,30 @@ export class Builder {
         // Normalize paths for cross-platform compatibility
         const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
         
-        smartLog.debug(`=== DEBUGGING PATH MATCHING [${process.platform}] ===`);
-        smartLog.debug(`File path: ${filePath}`);
-        smartLog.debug(`Workspace root: ${workspaceRoot}`);
-        smartLog.debug(`Relative path (normalized): ${relativePath}`);
-        smartLog.debug(`Available mappings: ${this.compiledMappings.length}`);
-        
         for (const mapping of this.compiledMappings) {
-            smartLog.debug(`\n--- Testing mapping: "${mapping.description}" ---`);
-            smartLog.debug(`Source pattern: "${mapping.source}"`);
-            smartLog.debug(`Compiled regex: ${mapping.sourceRegex}`);
-            smartLog.debug(`Testing against: "${relativePath}"`);
-            
-            // Test the regex pattern
             const regexMatch = mapping.sourceRegex.test(relativePath);
-            smartLog.debug(`Regex match result: ${regexMatch}`);
             
             if (regexMatch) {
-                // Check extensions if specified
                 const ext = path.extname(filePath).toLowerCase();
-                smartLog.debug(`File extension: "${ext}"`);
                 
                 if (mapping.extensions) {
-                    smartLog.debug(`Required extensions: [${mapping.extensions.join(', ')}]`);
                     if (!mapping.extensions.includes(ext)) {
-                        smartLog.debug(`❌ Extension mismatch: ${ext} not in required extensions`);
                         continue;
                     }
                 }
                 
                 if (mapping.excludeExtensions) {
-                    smartLog.debug(`Excluded extensions: [${mapping.excludeExtensions.join(', ')}]`);
                     if (mapping.excludeExtensions.includes(ext)) {
-                        smartLog.debug(`❌ Extension excluded: ${ext} in excluded extensions`);
                         continue;
                     }
                 }
                 
-                smartLog.debug(`✅ MATCH FOUND: ${mapping.description}`);
+                smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
                 return mapping;
-            } else {
-                smartLog.debug(`❌ Pattern did not match`);
             }
         }
         
-        smartLog.debug(`\n❌ No mapping found for: ${relativePath}`);
-        smartLog.debug(`=== END PATH MATCHING DEBUG ===\n`);
+        smartLog.debug(`No mapping for: ${relativePath}`);
         return null;
     }
 
@@ -2975,7 +2787,7 @@ export class Builder {
             return '';
         }
 
-        const tomcatHome = await tomcat.findTomcatHome();
+        const tomcatHome = await getTomcat().findTomcatHome();
         if (!tomcatHome) {
             return '';
         }

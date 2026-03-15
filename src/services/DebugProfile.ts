@@ -104,8 +104,41 @@ export class DebugProfile {
     }
 
     private stripJsonComments(text: string): string {
-        return text
-            .replace(/\/\*[\s\S]*?\*\//g, '')
-            .replace(/^\s*\/\/.*$/gm, '');
+        let result = '';
+        let i = 0;
+        let inString = false;
+        let stringChar = '';
+
+        while (i < text.length) {
+            if (inString) {
+                if (text[i] === '\\') {
+                    result += text[i] + (text[i + 1] ?? '');
+                    i += 2;
+                    continue;
+                }
+                if (text[i] === stringChar) {
+                    inString = false;
+                }
+                result += text[i];
+                i++;
+            } else if (text[i] === '"' || text[i] === "'") {
+                inString = true;
+                stringChar = text[i];
+                result += text[i];
+                i++;
+            } else if (text[i] === '/' && text[i + 1] === '/') {
+                // Line comment - skip to end of line
+                while (i < text.length && text[i] !== '\n') { i++; }
+            } else if (text[i] === '/' && text[i + 1] === '*') {
+                // Block comment - skip to */
+                i += 2;
+                while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) { i++; }
+                i += 2;
+            } else {
+                result += text[i];
+                i++;
+            }
+        }
+        return result;
     }
 }

@@ -4,7 +4,6 @@
  */
 
 import * as vscode from 'vscode';
-import { addSyntaxColoringRules } from '../utils/syntax';
 import { Builder } from '../services/Builder';
 import { Tomcat } from '../services/Tomcat';
 import { Logger } from '../services/Logger';
@@ -30,7 +29,7 @@ export function activate(context: vscode.ExtensionContext) {
         dispose: () => toolbar.dispose()
     });
 
-    addSyntaxColoringRules();
+
 
     context.subscriptions.push(
         vscode.commands.registerCommand('turbocat.start', () => tomcat.start(true)),
@@ -120,8 +119,8 @@ export function activate(context: vscode.ExtensionContext) {
 /**
  * Extension deactivation - cleanup resources
  */
-export function deactivate() {
-    Tomcat.getInstance().deactivate();
+export async function deactivate() {
+    await Tomcat.getInstance().deactivate();
     Logger.getInstance().deactivate();
     Builder.getInstance().disposeSmartDeploy();
 }
@@ -134,20 +133,23 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         Tomcat.getInstance().findTomcatHome();
         Builder.getInstance().updateConfig();
         Toolbar.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.javaHome')) {
+    if (event.affectsConfiguration('turbocat.javaHome')) {
         Tomcat.getInstance().findJavaHome();
         Builder.getInstance().updateConfig();
         Toolbar.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.port') ||
+    if (event.affectsConfiguration('turbocat.port') ||
         event.affectsConfiguration('turbocat.shutdownPort') ||
         event.affectsConfiguration('turbocat.debugPort')) {
         Tomcat.getInstance().updateConfig();
         Tomcat.getInstance().updatePort();
         Toolbar.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.smartDeploy')) {
+    if (event.affectsConfiguration('turbocat.smartDeploy')) {
         const mode = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy');
         if (mode === 'Smart') {
             Builder.getInstance().initializeSmartDeploy();
@@ -155,25 +157,30 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
             Builder.getInstance().disposeSmartDeploy();
         }
         Toolbar.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.tomcatEnvironment') ||
+    if (event.affectsConfiguration('turbocat.tomcatEnvironment') ||
         event.affectsConfiguration('turbocat.tomcatDebugEnvironment')) {
         Tomcat.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.deployPath')) {
+    if (event.affectsConfiguration('turbocat.deployPath')) {
         Tomcat.getInstance().updateConfig();
         Builder.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.preferredBuildType') ||
+    if (event.affectsConfiguration('turbocat.preferredBuildType') ||
         event.affectsConfiguration('turbocat.syncBypassPatterns')) {
         Builder.getInstance().updateConfig();
+    }
 
-    } else if (event.affectsConfiguration('turbocat.showTimestamp') ||
+    if (event.affectsConfiguration('turbocat.showTimestamp') ||
         event.affectsConfiguration('turbocat.logLevel') ||
         event.affectsConfiguration('turbocat.autoShowOutput')) {
         Logger.getInstance().updateConfig();
-        
-    } else if (event.affectsConfiguration('turbocat.logEncoding') ||
+    }
+
+    if (event.affectsConfiguration('turbocat.logEncoding') ||
         event.affectsConfiguration('turbocat.logEncodingCustom')) {
         const configuration = vscode.workspace.getConfiguration();
         const custom = (configuration.get<string>('turbocat.logEncodingCustom', '') ?? '').trim();
@@ -191,7 +198,9 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
         }
 
         Logger.getInstance().updateConfig();
-    } else if (event.affectsConfiguration('turbocat.compileEncoding')) {
+    }
+
+    if (event.affectsConfiguration('turbocat.compileEncoding')) {
         Builder.getInstance().updateConfig();
     }
 }
