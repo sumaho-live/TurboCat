@@ -28,7 +28,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 
 | Setting | Purpose | Notes |
 | --- | --- | --- |
-| `turbocat.home` / `turbocat.javaHome` | Optional overrides for discovery | Prompted on first launch if left blank |
+| `turbocat.home` / `turbocat.javaHome` | Optional overrides for discovery | Takes priority over system `JAVA_HOME`; prompted on first launch if left blank |
 | `turbocat.port` / `turbocat.debugPort` | Server & debug ports | Validated and written back to Tomcat configuration |
 | `turbocat.shutdownPort` | Tomcat shutdown socket | Must differ from the HTTP port; updates server.xml and restarts on demand |
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |

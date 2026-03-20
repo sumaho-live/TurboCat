@@ -926,6 +926,8 @@ export class Tomcat {
                 shell: process.platform === 'win32',
                 env: {
                     ...process.env,
+                    JAVA_HOME: javaHome,
+                    JRE_HOME: javaHome,
                     ...environment
                 }
             });
@@ -997,6 +999,8 @@ export class Tomcat {
             await execAsync(stopCommand, {
                 env: {
                     ...process.env,
+                    JAVA_HOME: javaHome,
+                    JRE_HOME: javaHome,
                     ...environment
                 }
             });

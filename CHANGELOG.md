@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.3]
+### Fixed
+- **Bug**: Configured `turbocat.javaHome` was ignored when starting or debugging Tomcat; the system default `JAVA_HOME` was used instead. The spawned Tomcat process now explicitly sets `JAVA_HOME` and `JRE_HOME` to the user-configured path.
+
 ## [1.0.2]
 ### Fixed
 - **Critical**: `Tomcat.kill()` no longer terminates all Java processes; now only kills the tracked PID or the process on the configured port.
