@@ -43,8 +43,9 @@ export class Logger {
     private constructor() {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
-        this.logLevel = vscode.workspace.getConfiguration().get<string>('turbocat.logLevel', 'INFO').toUpperCase();
-        if (!Object.keys(this.logLevels).includes(this.logLevel)) {
+        const config = vscode.workspace.getConfiguration('turbocat');
+        this.logLevel = (config.get<string>('logLevel', 'INFO') || 'INFO').trim().toUpperCase();
+        if (!(this.logLevel in this.logLevels)) {
             this.logLevel = 'INFO';
         }
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
@@ -80,8 +81,9 @@ export class Logger {
     public updateConfig(): void {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
         //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
-        this.logLevel = vscode.workspace.getConfiguration().get<string>('turbocat.logLevel', 'INFO').toUpperCase();
-        if (!Object.keys(this.logLevels).includes(this.logLevel)) {
+        const config = vscode.workspace.getConfiguration('turbocat');
+        this.logLevel = (config.get<string>('logLevel', 'INFO') || 'INFO').trim().toUpperCase();
+        if (!(this.logLevel in this.logLevels)) {
             this.logLevel = 'INFO';
         }
         this.showTimestamp = vscode.workspace.getConfiguration().get<boolean>('turbocat.showTimestamp', true);
@@ -357,7 +359,9 @@ export class Logger {
     ): void {
         const messageLevel = level.toUpperCase();
         const messageLevelValue = this.logLevels[messageLevel] ?? this.logLevels.INFO;
-        if (!isTomcatLog && messageLevelValue < this.logLevels[this.logLevel]) {
+        const threshold = this.logLevels[this.logLevel] ?? this.logLevels.INFO;
+        
+        if (!isTomcatLog && messageLevelValue < threshold) {
             return;
         }
 

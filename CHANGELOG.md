@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.4]
+### Fixed
+- **Bug**: Extension log level filtering (`turbocat.logLevel`) now works correctly by robustifying configuration reading and level threshold lookup.
+- **Bug**: Tomcat HTTP and Debug ports now apply correctly by synchronizing `server.xml` automatically before every start.
+- **Bug**: Improved `server.xml` port detection regex to handle spaces and system property placeholders (e.g. `${http.port}`).
+- **Requirement**: Tomcat server logs are now explicitly exempt from extension log level filtering, ensuring full server output remains visible regardless of the extension's configured verbosity.
+
 ## [1.0.3]
 ### Fixed
 - **Bug**: Configured `turbocat.javaHome` was ignored when starting or debugging Tomcat; the system default `JAVA_HOME` was used instead. The spawned Tomcat process now explicitly sets `JAVA_HOME` and `JRE_HOME` to the user-configured path.

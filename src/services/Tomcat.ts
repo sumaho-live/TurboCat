@@ -147,6 +147,9 @@ export class Tomcat {
         // Ensure Tomcat is stopped before starting
         await this.ensureTomcatStopped(false);
 
+        // Sync ports to server.xml before starting
+        await this.updatePort().catch(err => logger.error(`Failed to sync ports: ${err}`, false));
+
         try {
             await this.executeTomcatCommand('start', tomcatHome, javaHome, {
                 environment: this.tomcatEnvironment
@@ -176,6 +179,9 @@ export class Tomcat {
 
         // Ensure Tomcat is stopped before starting in debug mode
         await this.ensureTomcatStopped(false);
+
+        // Sync ports to server.xml before starting
+        await this.updatePort().catch(err => logger.error(`Failed to sync ports: ${err}`, false));
 
         try {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
@@ -854,44 +860,47 @@ export class Tomcat {
         const serverXmlPath = path.join(tomcatHome, 'conf', 'server.xml');
         const content = await fsp.readFile(serverXmlPath, 'utf8');
 
-        let updatedContent = content.replace(
-            /(<Server\b[^>]*port=")\d+(")/i,
-            `$1${ports.shutdown}$2`
-        );
-
-        if (updatedContent === content) {
-            throw new Error('Failed to update shutdown port in server.xml');
+        // Update shutdown port (Server port="...")
+        const serverTagMatch = content.match(/<Server\b[^>]*port="([^"]+)"/i);
+        if (!serverTagMatch) {
+            throw new Error('Failed to locate <Server> port in server.xml');
         }
 
-        let httpConnectorUpdated = false;
+        let updatedContent = content.replace(
+            /(<Server\b[^>]*port=")([^"]+)(")/i,
+            `$1${ports.shutdown}$3`
+        );
+
+        // Update HTTP connector port
+        let httpConnectorFound = false;
         updatedContent = updatedContent.replace(/<Connector\b[^>]*>/gi, (tag) => {
-            if (httpConnectorUpdated) {
+            if (httpConnectorFound) {
                 return tag;
             }
 
-            const isAJP = /protocol\s*=\s*".*AJP/i.test(tag);
-            if (isAJP) {
+            // Exclude AJP connectors
+            const protocol = (tag.match(/protocol\s*=\s*"([^"]+)"/i)?.[1] || 'HTTP/1.1').toUpperCase();
+            if (protocol.includes('AJP')) {
                 return tag;
             }
 
-            const isHttp = /protocol\s*=\s*".*http/i.test(tag) || !/protocol\s*=\s*"/i.test(tag);
-            if (!isHttp) {
+            // Must have a port attribute
+            if (!/port\s*=\s*"[^"]+"/i.test(tag)) {
                 return tag;
             }
 
-            if (!/port\s*=\s*"\d+"/i.test(tag)) {
-                return tag;
-            }
-
-            httpConnectorUpdated = true;
-            return tag.replace(/port\s*=\s*"\d+"/i, `port="${ports.http}"`);
+            httpConnectorFound = true;
+            return tag.replace(/port\s*=\s*"[^"]+"/i, `port="${ports.http}"`);
         });
 
-        if (!httpConnectorUpdated) {
+        if (!httpConnectorFound) {
             throw new Error('Failed to locate HTTP connector in server.xml');
         }
 
-        await fsp.writeFile(serverXmlPath, updatedContent);
+        // Only write back if content actually changed
+        if (updatedContent !== content) {
+            await fsp.writeFile(serverXmlPath, updatedContent);
+        }
     }
 
     /**

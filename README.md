@@ -84,7 +84,9 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 ## Logging
 - All output goes to a single VS Code Output channel named **TurboCat**.
 - Extension messages are prefixed with `[TurboCat][LEVEL]` and keep optional timestamps.
-- Tomcat logs stream through untouched, including HTTP access logs—no more reformatting.
+- Tomcat logs stream through untouched, including HTTP access logs—no more reformatting. Tomcat server logs are explicitly exempt from extension log level filtering to ensure full visibility.
+- Adjust `turbocat.logLevel` to control the verbosity of extension messages; setting to `INFO` will hide background `DEBUG` chatter.
+- Extension ports are automatically synchronized with Tomcat's `server.xml` before every start, ensuring your VS Code settings are always applied.
 - Adjust `turbocat.logEncoding` or `turbocat.logEncodingCustom` when Tomcat writes logs in encodings such as Shift_JIS or GBK.
 - Set `turbocat.showSmartDeployLog` to `false` if you want to hide Smart Deploy chatter while keeping warnings and errors.
 
