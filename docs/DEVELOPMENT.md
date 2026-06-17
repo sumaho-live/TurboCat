@@ -26,8 +26,8 @@ Launch the extension host from VS Code (`F5` / "Run Extension") to test changes 
 ```
 src/
 ├─ core/extension.ts      # Activation entry point
-├─ services/              # Singleton services (Tomcat, Builder, Logger, Toolbar, DebugProfile)
-├─ utils/syntax.ts        # Output channel colouring rules
+├─ services/              # Singleton services (Tomcat, TomcatBase, Builder, Logger, Toolbar, DebugProfile)
+├─ utils/                 # Shared helpers such as deployment path normalisation and syntax colouring
 └─ test/suite/            # Mocha test harness (to be updated alongside service changes)
 docs/                     # Documentation
 out/                      # Compiled webpack bundle
@@ -37,6 +37,7 @@ out/                      # Compiled webpack bundle
 - Favour the existing singleton services for shared state.
 - Keep asynchronous flows resilient: catch/handle errors and surface them through the logger.
 - When introducing new status-bar or command behaviour, route changes via `Toolbar`/`extension.ts`.
+- Runtime paths should go through `Tomcat.getCatalinaBase()` / `Tomcat.getWebappsRoot()` so workspace-local Tomcat bases and global Tomcat installs behave consistently.
 - Prefer updating documentation (`README.md` and `docs/`) alongside feature work.
 
 ## Useful Commands

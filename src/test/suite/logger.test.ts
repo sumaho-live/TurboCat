@@ -1,29 +1,48 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { Logger } from '../../utils/Logger';
+import * as sinon from 'sinon';
+import { Logger } from '../../services/Logger';
 
-suite('Logger Tests', () => {
+describe('Logger Tests', () => {
   let logger: Logger;
+  let sandbox: sinon.SinonSandbox;
+  let lines: string[];
 
-  setup(() => {
+  beforeEach(() => {
+    sandbox = sinon.createSandbox();
+    lines = [];
+    (Logger as unknown as { instance?: Logger }).instance = undefined;
+    sandbox.stub(vscode.window, 'createOutputChannel').returns({
+      name: 'TurboCat',
+      logLevel: vscode.LogLevel.Info,
+      onDidChangeLogLevel: () => ({ dispose: () => undefined }),
+      appendLine: (line: string) => lines.push(line),
+      append: (value: string) => lines.push(value),
+      replace: () => undefined,
+      clear: () => { lines = []; },
+      show: () => undefined,
+      hide: () => undefined,
+      dispose: () => undefined
+    } as unknown as vscode.LogOutputChannel);
     logger = Logger.getInstance();
-    vscode.workspace.getConfiguration('tomcat').update('loggingLevel', 'WARN', true);
   });
 
-  test('Logging level configuration', async () => {
-    await vscode.workspace.getConfiguration('tomcat').update('loggingLevel', 'ERROR', true);
-    assert.strictEqual(logger['getCurrentLogLevel'](), 3); // ERROR level
+  afterEach(() => {
+    logger.deactivate();
+    sandbox.restore();
+    (Logger as unknown as { instance?: Logger }).instance = undefined;
   });
 
-  test('Status bar updates', () => {
-    const mockContext = {
-      subscriptions: [] as vscode.Disposable[]
-    } as vscode.ExtensionContext;
-    
-    logger.initStatusBar(mockContext);
-    logger.updateStatusBar('Testing');
-    
-    assert.strictEqual(logger['statusBarItem']?.text, '$(sync~spin) Testing');
-    assert.strictEqual(mockContext.subscriptions.length, 1);
+  it('formats extension logs with TurboCat prefix', () => {
+    logger.info('hello');
+
+    assert.strictEqual(lines.length, 1);
+    assert.match(lines[0], /\[TurboCat\]\[INFO\] hello$/);
+  });
+
+  it('passes raw Tomcat log lines through unchanged', () => {
+    logger.appendRawLine('GET /health 200');
+
+    assert.deepStrictEqual(lines, ['GET /health 200']);
   });
 });

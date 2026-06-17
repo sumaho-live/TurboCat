@@ -38,6 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('turbocat.deploy', () => builder.deploy('Choice')),
         vscode.commands.registerCommand('turbocat.startDebug', () => tomcat.startDebug(true)),
         vscode.commands.registerCommand('turbocat.reload', () => tomcat.reload()),
+        vscode.commands.registerCommand('turbocat.initializeWorkspaceTomcatBase', () => tomcat.initializeWorkspaceTomcatBase()),
         vscode.commands.registerCommand('turbocat.toggleSmartDeploy', async () => {
             const currentMode = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy', 'Disable');
             const newMode = currentMode === 'Smart' ? 'Disable' : 'Smart';
@@ -167,6 +168,13 @@ function updateSettings(event: vscode.ConfigurationChangeEvent) {
     if (event.affectsConfiguration('turbocat.deployPath')) {
         Tomcat.getInstance().updateConfig();
         Builder.getInstance().updateConfig();
+    }
+
+    if (event.affectsConfiguration('turbocat.useWorkspaceTomcatBase') ||
+        event.affectsConfiguration('turbocat.workspaceTomcatBasePath')) {
+        Tomcat.getInstance().updateConfig();
+        Builder.getInstance().updateConfig();
+        Logger.getInstance().updateConfig();
     }
 
     if (event.affectsConfiguration('turbocat.preferredBuildType') ||

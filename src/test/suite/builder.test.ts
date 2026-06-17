@@ -3,149 +3,131 @@ import * as vscode from 'vscode';
 import * as sinon from 'sinon';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Builder } from '../../utils/Builder';
-import { Logger } from '../../utils/Logger';
-import { Tomcat } from '../../utils/Tomcat';
+import * as os from 'os';
+import { Builder } from '../../services/Builder';
+import { Tomcat } from '../../services/Tomcat';
 
 describe('Builder Tests', () => {
   let builder: Builder;
-  let logger: Logger;
   let sandbox: sinon.SinonSandbox;
-  let mockContext: vscode.ExtensionContext;
+  let workspaceRoot: string;
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();
-    logger = Logger.getInstance();
-    builder = Builder.getInstance();
-    mockContext = {
-      subscriptions: [],
-      workspaceState: { get: () => {}, update: () => Promise.resolve() },
-      globalState: { get: () => {}, update: () => Promise.resolve() },
-    } as unknown as vscode.ExtensionContext;
-
-    (Builder as any).instance = null;
-    (Tomcat as any).instance = null;
-    
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-test-'));
+    (Builder as unknown as { instance?: Builder }).instance = undefined;
+    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
     sandbox.stub(vscode.workspace, 'workspaceFolders').value([{
-      uri: vscode.Uri.file('/test/project'),
-      name: 'project',
+      uri: vscode.Uri.file(workspaceRoot),
+      name: path.basename(workspaceRoot),
       index: 0
     }]);
+    builder = Builder.getInstance();
   });
 
   afterEach(() => {
     sandbox.restore();
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    (Builder as unknown as { instance?: Builder }).instance = undefined;
+    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
   });
 
   describe('isJavaEEProject()', () => {
     it('should detect JavaEE project with WEB-INF', () => {
-        sandbox.stub(fs, 'existsSync').callsFake((p: fs.PathLike) => {
-          const webInfPath = path.join(path.dirname(p.toString()), 'WEB-INF');
-          return fs.existsSync(webInfPath);
-        });
-        assert.strictEqual(Builder.isJavaEEProject(), true);
+      fs.mkdirSync(path.join(workspaceRoot, 'src', 'main', 'webapp', 'WEB-INF'), { recursive: true });
+
+      assert.strictEqual(Builder.isJavaEEProject(), true);
     });
 
     it('should detect Maven WAR project', () => {
-        sandbox.stub(fs, 'existsSync').callsFake((p: fs.PathLike) => {
-            const fileName = path.basename(p.toString());
-            return fileName.endsWith('pom.xml');
-        });
-        sandbox.stub(fs, 'readFileSync').returns('<packaging>war</packaging>');
-        assert.strictEqual(Builder.isJavaEEProject(), true);
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project><packaging>war</packaging></project>');
+
+      assert.strictEqual(Builder.isJavaEEProject(), true);
     });
 
     it('should return false for non-JavaEE projects', () => {
-      sandbox.stub(fs, 'existsSync').returns(false);
       assert.strictEqual(Builder.isJavaEEProject(), false);
     });
   });
 
-  describe('deploy()', () => {
-    let execStub: sinon.SinonStub;
-    let showProgressStub: sinon.SinonStub;
+  describe('detectProjectStructure()', () => {
+    it('uses the Maven artifactId as the default webapp name', () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), [
+        '<project>',
+        '  <parent><artifactId>parent-app</artifactId></parent>',
+        '  <artifactId>sample-webapp</artifactId>',
+        '</project>'
+      ].join('\n'));
 
-    beforeEach(() => {
-      execStub = sandbox.stub(require('child_process'), 'exec');
-      showProgressStub = sandbox.stub(vscode.window, 'withProgress');
-      showProgressStub.callsFake((_, task) => task());
-      
-      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves('/tomcat');
-      sandbox.stub(Tomcat.getInstance(), 'reload').resolves();
+      const structure = builder.detectProjectStructure();
+
+      assert.strictEqual(structure.type, 'maven');
+      assert.strictEqual(structure.defaultWebappName, 'sample-webapp');
+      assert.strictEqual(structure.webappName, 'sample-webapp');
     });
 
-    it('should perform Fast deploy', async () => {
-      sandbox.stub(fs, 'existsSync').returns(true);
-      const cpSyncStub = sandbox.stub(fs, 'cpSync');
-      const rmSyncStub = sandbox.stub(fs, 'rmSync');
+    it('detects Gradle projects and reads settings.gradle project names', () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'build.gradle'), 'plugins { id "war" }');
+      fs.writeFileSync(path.join(workspaceRoot, 'settings.gradle'), 'rootProject.name = "gradle-webapp"');
 
-      await builder.deploy('Fast');
-      
-      assert.ok(cpSyncStub.calledWith(sinon.match(/webapp/), 'Should copy webapp'));
-      assert.ok(rmSyncStub.calledWith(sinon.match(/webapps\/project/)));
-    });
+      const structure = builder.detectProjectStructure();
 
-    it('should handle Maven deploy', async () => {
-      sandbox.stub(fs, 'existsSync').withArgs(sinon.match(/pom.xml/)).returns(true);
-      execStub.callsArgWith(1, null, 'BUILD SUCCESS', '');
-
-      await builder.deploy('Maven');
-      
-      assert.ok(execStub.calledWith('mvn clean package'), 'Should execute Maven command');
-      assert.ok(execStub.calledWith('mvn clean package'), 'Should execute Maven command');
-    });
-
-    it('should handle Gradle deploy', async () => {
-      sandbox.stub(fs, 'existsSync').withArgs(sinon.match(/build.gradle/)).returns(true);
-      execStub.callsArgWith(1, null, 'BUILD SUCCESSFUL', '');
-
-      await builder.deploy('Gradle');
-      
-      assert.ok(execStub.calledWithMatch(/gradlew.*war/), 'Should execute Gradle command');
-      assert.ok(execStub.calledWith('mvn clean package'), 'Should execute Maven command');
-    });
-
-    it('should show error on failed deployment', async () => {
-      const errorStub = sandbox.stub(logger, 'error');
-      execStub.callsArgWith(1, new Error('Build failed'));
-      
-      await builder.deploy('Maven');
-      assert.ok(errorStub.calledWithMatch('Maven build failed'), 'Should log error');
+      assert.strictEqual(structure.type, 'gradle');
+      assert.strictEqual(structure.defaultWebappName, 'gradle-webapp');
+      assert.strictEqual(structure.webappName, 'gradle-webapp');
     });
   });
 
-  describe('createNewProject()', () => {
-    it('should prompt for project creation', async () => {
-      const showInfoStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves('Yes' as any);
-      const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves();
-      
-      await builder['createNewProject']();
-      
-      assert.ok(showInfoStub.calledWithMatch('No Java EE project found'));
-      assert.ok(executeCommandStub.calledWith('java.project.create'));
-    });
+  describe('build type candidates', () => {
+    it('includes Maven and Gradle only when their build files exist', () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
+      fs.writeFileSync(path.join(workspaceRoot, 'build.gradle'), 'plugins { id "war" }');
 
-    it('should handle missing Java extension', async () => {
-      sandbox.stub(vscode.commands, 'getCommands').resolves([]);
-      const showErrorStub = sandbox.stub(vscode.window, 'showErrorMessage');
-      
-      await builder['createNewProject']();
-      assert.ok(showErrorStub.calledWithMatch('Java Extension Pack required'));
+      const candidates = (builder as unknown as {
+        collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle'>;
+      }).collectBuildCandidates(workspaceRoot);
+
+      assert.deepStrictEqual(candidates, ['Local', 'Maven', 'Gradle']);
     });
   });
 
-  describe('autoDeploy()', () => {
-    it('should trigger deploy on manual save', async () => {
-      const deployStub = sandbox.stub(builder, 'deploy').resolves();
-      await builder.autoDeploy(vscode.TextDocumentSaveReason.Manual);
-      assert.ok(deployStub.called);
-    });
+  describe('smart deploy deletion', () => {
+    it('removes deployed compiled classes when their source class file is deleted', async () => {
+      const tomcatHome = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-home-test-'));
+      try {
+        fs.mkdirSync(path.join(tomcatHome, 'conf'), { recursive: true });
+        fs.writeFileSync(path.join(tomcatHome, 'conf', 'server.xml'), '<Server port="8005" />');
+        const deployedClass = path.join(workspaceRoot, '.vscode', 'turbocat', 'webapps', 'sample-webapp', 'WEB-INF', 'classes', 'com', 'example', 'Foo.class');
+        fs.mkdirSync(path.dirname(deployedClass), { recursive: true });
+        fs.writeFileSync(deployedClass, 'compiled');
 
-    it('should skip deploy when already deploying', async () => {
-      (builder as any).isDeploying = true;
-      const deployStub = sandbox.stub(builder, 'deploy').resolves();
-      await builder.autoDeploy(vscode.TextDocumentSaveReason.Manual);
-      assert.ok(deployStub.notCalled);
+        sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(tomcatHome);
+        (builder as unknown as { projectStructure: { webappName: string } }).projectStructure = {
+          webappName: 'sample-webapp'
+        };
+        (builder as unknown as { compiledMappings: unknown[] }).compiledMappings = [{
+          source: 'target/classes/**/*.class',
+          destination: 'WEB-INF/classes/{relative}',
+          needsReload: true,
+          description: 'Java compiled classes',
+          extensions: ['.class'],
+          absoluteSource: '',
+          absoluteDestination: '',
+          sourceRegex: /^target\/classes\/.*\.class$/,
+          origin: 'smart'
+        }];
+
+        await (builder as unknown as {
+          executeCompiledFileDeployment(filePath: string, eventType: 'change' | 'create' | 'delete'): Promise<void>;
+        }).executeCompiledFileDeployment(
+          path.join(workspaceRoot, 'target', 'classes', 'com', 'example', 'Foo.class'),
+          'delete'
+        );
+
+        assert.strictEqual(fs.existsSync(deployedClass), false);
+      } finally {
+        fs.rmSync(tomcatHome, { recursive: true, force: true });
+      }
     });
   });
 });

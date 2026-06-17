@@ -13,6 +13,8 @@ import { Logger } from './Logger';
 import { ChildProcess, spawn } from 'child_process';
 import * as net from 'net';
 import iconv from 'iconv-lite';
+import { normalizeDeploymentPath } from '../utils/deploymentPath';
+import { TomcatBase } from './TomcatBase';
 
 const execAsync = promisify(exec);
 const logger = Logger.getInstance();
@@ -104,7 +106,7 @@ export class Tomcat {
 
     /** Set application name for deployment */
     public setAppName(appName: string): void {
-        this.currentAppName = this.normalizeDeployPath(appName);
+        this.currentAppName = normalizeDeploymentPath(appName);
     }
 
     /** Get current application name or derive from workspace */
@@ -143,6 +145,8 @@ export class Tomcat {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
         if (!tomcatHome || !javaHome) { return false; }
+        const catalinaBase = await this.getCatalinaBase(tomcatHome);
+        Logger.getInstance().setRuntimeBase(catalinaBase);
 
         // Ensure Tomcat is stopped before starting
         await this.ensureTomcatStopped(false);
@@ -152,6 +156,7 @@ export class Tomcat {
 
         try {
             await this.executeTomcatCommand('start', tomcatHome, javaHome, {
+                catalinaBase,
                 environment: this.tomcatEnvironment
             });
             const started = await this.waitForServerState('running');
@@ -176,6 +181,8 @@ export class Tomcat {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
         if (!tomcatHome || !javaHome) { return false; }
+        const catalinaBase = await this.getCatalinaBase(tomcatHome);
+        Logger.getInstance().setRuntimeBase(catalinaBase);
 
         // Ensure Tomcat is stopped before starting in debug mode
         await this.ensureTomcatStopped(false);
@@ -186,6 +193,7 @@ export class Tomcat {
         try {
             const debugPort = vscode.workspace.getConfiguration().get<number>('turbocat.debugPort', 8000);
             await this.executeTomcatCommand('start', tomcatHome, javaHome, {
+                catalinaBase,
                 debug: true,
                 debugPort,
                 environment: this.tomcatDebugEnvironment
@@ -221,6 +229,7 @@ export class Tomcat {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
         if (!tomcatHome || !javaHome) { return false; }
+        const catalinaBase = await this.getCatalinaBase(tomcatHome);
 
         if (!await this.isTomcatRunning()) {
             logger.info('Tomcat is not running', showMessages);
@@ -228,7 +237,7 @@ export class Tomcat {
         }
 
         try {
-            const shutdownSent = await this.sendShutdownSignal(tomcatHome);
+            const shutdownSent = await this.sendShutdownSignal(catalinaBase);
             if (!shutdownSent) {
                 if (this.tomcatProcess && !this.tomcatProcess.killed) {
                     await this.terminateSpawnedProcess();
@@ -236,7 +245,7 @@ export class Tomcat {
                     const environment = this.lastStartMode === 'debug'
                         ? this.tomcatDebugEnvironment
                         : this.tomcatEnvironment;
-                    await this.executeTomcatCommand('stop', tomcatHome, javaHome, { environment });
+                    await this.executeTomcatCommand('stop', tomcatHome, javaHome, { catalinaBase, environment });
                 }
             }
 
@@ -340,6 +349,7 @@ export class Tomcat {
         const tomcatHome = await this.findTomcatHome();
         const javaHome = await this.findJavaHome();
         if (!tomcatHome || !javaHome) { return; }
+        const catalinaBase = await this.getCatalinaBase(tomcatHome);
 
         try {
             const appName = this.currentAppName || this.getAppName();
@@ -351,7 +361,7 @@ export class Tomcat {
             // Ensure Tomcat is stopped before cleaning
             await this.ensureTomcatStopped(true);
 
-            const appDir = path.join(tomcatHome, 'webapps', appName);
+            const appDir = path.join(catalinaBase, 'webapps', appName);
 
             if (!fs.existsSync(appDir)) {
                 logger.warn(`Webapp directory not found: ${appDir}`);
@@ -361,13 +371,13 @@ export class Tomcat {
             fs.rmSync(appDir, { recursive: true, force: true });
             logger.info(`Removed directory: ${appDir}`);
 
-            const workDir = path.join(tomcatHome, 'work', appName);
+            const workDir = path.join(catalinaBase, 'work', appName);
             if (fs.existsSync(workDir)) {
                 fs.rmSync(workDir, { recursive: true, force: true });
                 logger.info(`Cleaned work directory: ${workDir}`);
             }
 
-            const tempDir = path.join(tomcatHome, 'temp', appName);
+            const tempDir = path.join(catalinaBase, 'temp', appName);
             if (fs.existsSync(tempDir)) {
                 fs.rmSync(tempDir, { recursive: true, force: true });
                 fs.mkdirSync(tempDir, { recursive: true });
@@ -464,12 +474,12 @@ export class Tomcat {
         }
     }
 
-    private async sendShutdownSignal(tomcatHome: string): Promise<boolean> {
+    private async sendShutdownSignal(catalinaBase: string): Promise<boolean> {
         if (!this.shutdownPort || this.shutdownPort <= 0) {
             return false;
         }
 
-        const serverXmlPath = path.join(tomcatHome, 'conf', 'server.xml');
+        const serverXmlPath = path.join(catalinaBase, 'conf', 'server.xml');
         let shutdownCommand = 'SHUTDOWN';
         try {
             const xml = await fsp.readFile(serverXmlPath, 'utf8');
@@ -752,6 +762,7 @@ export class Tomcat {
             const javaHome = await this.findJavaHome();
             const tomcatHome = await this.findTomcatHome();
             if (!javaHome || !tomcatHome) { return; }
+            const catalinaBase = await this.getCatalinaBase(tomcatHome);
 
             await this.validatePort(newPort);
             await this.validatePort(newShutdownPort);
@@ -763,7 +774,7 @@ export class Tomcat {
             const wasRunning = await this.isTomcatRunning();
             await this.ensureTomcatStopped(true);
 
-            await this.modifyServerXmlPorts(tomcatHome, {
+            await this.modifyServerXmlPorts(catalinaBase, {
                 http: newPort,
                 shutdown: newShutdownPort
             });
@@ -778,7 +789,7 @@ export class Tomcat {
 
             if (wasRunning) {
                 try {
-                    await this.executeTomcatCommand('start', tomcatHome, javaHome);
+                    await this.executeTomcatCommand('start', tomcatHome, javaHome, { catalinaBase });
                 } catch (startError) {
                     logger.error('Tomcat failed to restart after port change:', true, startError as string);
                 }
@@ -922,19 +933,25 @@ export class Tomcat {
         action: 'start' | 'stop',
         tomcatHome: string,
         javaHome: string,
-        options?: { debug?: boolean, debugPort?: number, environment?: Record<string, string> }
+        options?: { debug?: boolean, debugPort?: number, environment?: Record<string, string>, catalinaBase?: string }
     ): Promise<void> {
         const environment = options?.environment ?? this.tomcatEnvironment;
+        const catalinaBase = options?.catalinaBase ?? await this.getCatalinaBase(tomcatHome);
 
         if (action === 'start') {
             const logEncoding = logger.getLogEncoding();
-            const { command, args } = this.buildCommand(action, tomcatHome, javaHome, options);
+            const { command, args } = this.buildCommand(action, tomcatHome, javaHome, {
+                ...options,
+                catalinaBase
+            });
 
             const child = spawn(command, args, {
                 stdio: 'pipe',
                 shell: process.platform === 'win32',
                 env: {
                     ...process.env,
+                    CATALINA_HOME: tomcatHome,
+                    CATALINA_BASE: catalinaBase,
                     JAVA_HOME: javaHome,
                     JRE_HOME: javaHome,
                     ...environment
@@ -1003,11 +1020,13 @@ export class Tomcat {
                 }, 500);
             });
         } else {
-            const { command, args } = this.buildCommand(action, tomcatHome, javaHome);
+            const { command, args } = this.buildCommand(action, tomcatHome, javaHome, { catalinaBase });
             const stopCommand = [command, ...args].join(' ');
             await execAsync(stopCommand, {
                 env: {
                     ...process.env,
+                    CATALINA_HOME: tomcatHome,
+                    CATALINA_BASE: catalinaBase,
                     JAVA_HOME: javaHome,
                     JRE_HOME: javaHome,
                     ...environment
@@ -1034,9 +1053,10 @@ export class Tomcat {
         action: 'start' | 'stop',
         tomcatHome: string,
         javaHome: string,
-        options?: { debug?: boolean, debugPort?: number }
+        options?: { debug?: boolean, debugPort?: number, catalinaBase?: string }
     ): { command: string; args: string[] } {
         const javaExecutable = path.join(javaHome, 'bin', `java${process.platform === 'win32' ? '.exe' : ''}`);
+        const catalinaBase = options?.catalinaBase ?? tomcatHome;
         const classpath = [
             path.join(tomcatHome, 'bin', 'bootstrap.jar'),
             path.join(tomcatHome, 'bin', 'tomcat-juli.jar')
@@ -1045,9 +1065,9 @@ export class Tomcat {
         const args = [
             '-cp',
             classpath,
-            `-Dcatalina.base=${tomcatHome}`,
+            `-Dcatalina.base=${catalinaBase}`,
             `-Dcatalina.home=${tomcatHome}`,
-            `-Djava.io.tmpdir=${path.join(tomcatHome, 'temp')}`,
+            `-Djava.io.tmpdir=${path.join(catalinaBase, 'temp')}`,
             'org.apache.catalina.startup.Bootstrap',
             action
         ];
@@ -1115,19 +1135,32 @@ export class Tomcat {
 
     private resolveDeployPathSetting(): string {
         const configured = vscode.workspace.getConfiguration().get<string>('turbocat.deployPath', '') || '';
-        return this.normalizeDeployPath(configured);
+        return normalizeDeploymentPath(configured);
     }
 
-    private normalizeDeployPath(value: string): string {
-        const trimmed = (value ?? '').trim();
-        if (!trimmed) {
+    public async getCatalinaBase(tomcatHome?: string): Promise<string> {
+        const resolvedTomcatHome = tomcatHome ?? await this.findTomcatHome();
+        if (!resolvedTomcatHome) {
             return '';
         }
 
-        const normalized = trimmed.replace(/\\/g, '/');
-        const withoutLeading = normalized.replace(/^\/+/, '');
-        const withoutTrailing = withoutLeading.replace(/\/+$/, '');
+        return TomcatBase.getInstance().resolveCatalinaBase(resolvedTomcatHome);
+    }
 
-        return withoutTrailing;
+    public async getWebappsRoot(tomcatHome?: string): Promise<string> {
+        const catalinaBase = await this.getCatalinaBase(tomcatHome);
+        return catalinaBase ? path.join(catalinaBase, 'webapps') : '';
+    }
+
+    public async initializeWorkspaceTomcatBase(): Promise<string | null> {
+        const tomcatHome = await this.findTomcatHome();
+        if (!tomcatHome) {
+            return null;
+        }
+
+        const catalinaBase = await TomcatBase.getInstance().initializeWorkspaceBase(tomcatHome);
+        Logger.getInstance().setRuntimeBase(catalinaBase);
+        logger.success(`Workspace Tomcat configuration initialized: ${catalinaBase}`, true);
+        return catalinaBase;
     }
 }

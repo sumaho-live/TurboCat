@@ -12,6 +12,7 @@ import { env } from 'vscode';
 import { glob } from 'glob';
 import { Tomcat } from './Tomcat';
 import { Logger } from './Logger';
+import { normalizeDeploymentPath } from '../utils/deploymentPath';
 // import { promisify } from 'util';
 
 // const execAsync = promisify(exec);
@@ -622,8 +623,7 @@ export class Builder {
 
         const candidate = (defaultName ?? '').trim();
         if (candidate) {
-            const normalized = candidate.replace(/\\/g, '/');
-            return normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+            return normalizeDeploymentPath(candidate);
         }
 
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -867,9 +867,12 @@ export class Builder {
         
         getTomcat().setAppName(appName);
 
-        if (!tomcatHome || !appName || !fs.existsSync(path.join(tomcatHome, 'webapps'))) { return; }
+        if (!tomcatHome || !appName) { return; }
 
-        const targetDir = path.join(tomcatHome, 'webapps', appName);
+        const webappsRoot = await getTomcat().getWebappsRoot(tomcatHome);
+        if (!webappsRoot) { return; }
+
+        const targetDir = path.join(webappsRoot, appName);
         await vscode.workspace.saveAll();
 
         try {            
@@ -1567,8 +1570,7 @@ export class Builder {
     private async deployStaticResourceImmediately(filePath: string, eventType: 'change' | 'create' | 'delete'): Promise<void> {
         try {
             if (eventType === 'delete') {
-                smartLog.debug(`Static resource deleted: ${path.basename(filePath)}`);
-                // TODO: Handle deletion - remove corresponding deployed files
+                await this.removeDeployedFile(filePath, 'static');
                 return;
             }
 
@@ -1591,8 +1593,8 @@ export class Builder {
             await this.copyFileWithLogging(filePath, targetPath, 'static');
             
             const fileName = path.basename(filePath);
-            const tomcatHome = await getTomcat().findTomcatHome();
-            const relativePath = tomcatHome ? path.relative(path.join(tomcatHome, 'webapps'), targetPath) : path.basename(targetPath);
+            const webappsRoot = await getTomcat().getWebappsRoot();
+            const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
             smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
             
         } catch (error) {
@@ -1693,8 +1695,7 @@ export class Builder {
      */
     private async executeCompiledFileDeployment(filePath: string, eventType: 'change' | 'create' | 'delete'): Promise<void> {
         if (eventType === 'delete') {
-            smartLog.debug(`Compiled file deleted: ${path.basename(filePath)}`);
-            // TODO: Handle deletion - remove corresponding deployed files
+            await this.removeDeployedFile(filePath, 'class');
             return;
         }
 
@@ -1715,9 +1716,33 @@ export class Builder {
         await this.copyFileWithLogging(filePath, targetPath, 'class');
         
         const fileName = path.basename(filePath);
-        const tomcatHome = await getTomcat().findTomcatHome();
-        const relativePath = tomcatHome ? path.relative(path.join(tomcatHome, 'webapps'), targetPath) : path.basename(targetPath);
+        const webappsRoot = await getTomcat().getWebappsRoot();
+        const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
         smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
+    }
+
+    private async removeDeployedFile(filePath: string, type: 'class' | 'static'): Promise<void> {
+        const mapping = this.findMatchingMapping(filePath);
+        if (!mapping) {
+            smartLog.debug(`No mapping found for deleted ${type} file: ${path.basename(filePath)}`);
+            return;
+        }
+
+        const targetPath = await this.generateDestinationPath(mapping, filePath, { ensureParent: false });
+        if (!targetPath) {
+            smartLog.warn(`Failed to generate delete target for: ${path.basename(filePath)}`);
+            return;
+        }
+
+        if (!fs.existsSync(targetPath)) {
+            smartLog.debug(`Deployed ${type} file already absent: ${path.basename(targetPath)}`);
+            return;
+        }
+
+        fs.rmSync(targetPath, { force: true });
+        const webappsRoot = await getTomcat().getWebappsRoot();
+        const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
+        smartLog.info(`Removed deployed ${type}: ${relativePath}`);
     }
 
     // LEGACY: Old debounced deploy method (commented out)
@@ -2781,19 +2806,23 @@ export class Builder {
     /**
      * Generate destination path from mapping and source file with proper relative path handling
      */
-    private async generateDestinationPath(mapping: CompiledMapping, sourceFile: string): Promise<string> {
+    private async generateDestinationPath(
+        mapping: CompiledMapping,
+        sourceFile: string,
+        options: { ensureParent?: boolean } = {}
+    ): Promise<string> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) {
             return '';
         }
 
-        const tomcatHome = await getTomcat().findTomcatHome();
-        if (!tomcatHome) {
+        const webappsRoot = await getTomcat().getWebappsRoot();
+        if (!webappsRoot) {
             return '';
         }
 
         // Get the webapp directory
-        const webappDir = path.join(tomcatHome, 'webapps', this.projectStructure?.webappName || '');
+        const webappDir = path.join(webappsRoot, this.projectStructure?.webappName || '');
 
         // Get relative path from workspace
         const relativePath = path.relative(workspaceRoot, sourceFile);
@@ -2813,10 +2842,11 @@ export class Builder {
         // Create full destination path
         const fullDestinationPath = path.join(webappDir, destinationPath);
         
-        // Ensure parent directory exists
-        const targetDir = path.dirname(fullDestinationPath);
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
+        if (options.ensureParent !== false) {
+            const targetDir = path.dirname(fullDestinationPath);
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
+            }
         }
         
         smartLog.debug(`Path mapping: ${relativePath} → ${destinationPath}`);

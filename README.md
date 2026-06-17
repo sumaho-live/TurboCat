@@ -5,6 +5,7 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 ## Highlights
 - **Smart synchronization** – dual watchers keep static resources and compiled classes in sync with Tomcat, now with configurable filename bypass rules for temporary “copy” artifacts.
 - **Guided automation** – one-click commands start, stop, clean, or reload Tomcat and generate Java debug profiles when you need them.
+- **Workspace isolation** – project-local `CATALINA_BASE` config keeps `server.xml`, logs, temp files, and deployed apps separate from other workspaces.
 - **Unified diagnostics** – a single TurboCat output channel streams extension messages and Tomcat logs with consistent formatting.
 - **Zero guessing** – automatic detection locates Tomcat, the JDK, ports, and project type so you can stay focused on code.
 
@@ -20,6 +21,7 @@ TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and pred
 - `TurboCat: Clean` – removes the active webapp deployment and its cached work/temp artifacts.
 - `TurboCat: Reload` – reloads the active context or restarts when necessary, waiting for Tomcat to shut down cleanly before coming back up.
 - `TurboCat: Generate Java Debug Profile` – scaffolds `.vscode/launch.json` and keeps the attach port aligned with TurboCat settings.
+- `TurboCat: Initialize Workspace Tomcat Config` – creates or refreshes the project-local Tomcat base used for isolated runtime config.
 
 The status-bar toolbar hides actions that are not relevant to the current server state. When Tomcat is stopped you only see start/debug/deploy. Once the server is running the toolbar collapses to stop/reload/clean plus the smart deploy toggle. The Smart Deploy button now shows `Smart Deploy` or `Smart Deploy (Off)` so you can see the mode at a glance.
 
@@ -39,8 +41,27 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
+| `turbocat.useWorkspaceTomcatBase` | Isolate Tomcat runtime files per workspace | Enabled by default; uses Tomcat's `CATALINA_BASE` support |
+| `turbocat.workspaceTomcatBasePath` | Workspace Tomcat base location | Defaults to `.vscode/turbocat` |
 | `turbocat.tomcatEnvironment` | Environment variables for standard starts | JSON object of key/value pairs applied to normal `TurboCat: Start` runs |
 | `turbocat.tomcatDebugEnvironment` | Debug-only environment overrides | Applied exclusively to `TurboCat: Start in Debug Mode`, leaving normal starts untouched |
+
+## Workspace Tomcat Config
+
+TurboCat uses your configured Tomcat installation as `CATALINA_HOME`, but by default creates a project-local `CATALINA_BASE` at `.vscode/turbocat`. That directory contains the mutable runtime files:
+
+```text
+.vscode/turbocat/
+├─ conf/
+├─ logs/
+├─ temp/
+├─ work/
+└─ webapps/
+```
+
+On first use, TurboCat copies missing files from `<tomcatHome>/conf` into `.vscode/turbocat/conf` and preserves files that already exist. Port updates, deployments, clean operations, and log watching use the workspace base, so one project can change `server.xml` or deploy a webapp without affecting another project using the same Tomcat installation.
+
+Set `turbocat.useWorkspaceTomcatBase` to `false` to use the Tomcat installation directory directly.
 
 ## Project Types
 TurboCat autodetects common Java web structures:
@@ -87,6 +108,7 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 - Tomcat logs stream through untouched, including HTTP access logs—no more reformatting. Tomcat server logs are explicitly exempt from extension log level filtering to ensure full visibility.
 - Adjust `turbocat.logLevel` to control the verbosity of extension messages; setting to `INFO` will hide background `DEBUG` chatter.
 - Extension ports are automatically synchronized with Tomcat's `server.xml` before every start, ensuring your VS Code settings are always applied.
+- With workspace isolation enabled, logs are read from `.vscode/turbocat/logs` and port changes are written to `.vscode/turbocat/conf/server.xml`.
 - Adjust `turbocat.logEncoding` or `turbocat.logEncodingCustom` when Tomcat writes logs in encodings such as Shift_JIS or GBK.
 - Set `turbocat.showSmartDeployLog` to `false` if you want to hide Smart Deploy chatter while keeping warnings and errors.
 

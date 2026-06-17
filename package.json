@@ -48,7 +48,15 @@
     "workspaceContains:.classpath",
     "onCommand:turbocat.deploy",
     "onCommand:turbocat.start",
-    "onCommand:turbocat.stop"
+    "onCommand:turbocat.stop",
+    "onCommand:turbocat.clean",
+    "onCommand:turbocat.startDebug",
+    "onCommand:turbocat.toggleSmartDeploy",
+    "onCommand:turbocat.debugSmartDeploy",
+    "onCommand:turbocat.testCompiledWatcher",
+    "onCommand:turbocat.generateDebugProfile",
+    "onCommand:turbocat.initializeWorkspaceTomcatBase",
+    "onCommand:turbocat.reload"
   ],
   "engines": {
     "vscode": "^1.56.0",
@@ -126,6 +134,10 @@
       {
         "command": "turbocat.generateDebugProfile",
         "title": "TurboCat: Generate Java Debug Profile"
+      },
+      {
+        "command": "turbocat.initializeWorkspaceTomcatBase",
+        "title": "TurboCat: Initialize Workspace Tomcat Config"
       },
       {
         "command": "turbocat.reload",
@@ -255,6 +267,18 @@
           "scope": "window",
           "markdownDescription": "Override the Tomcat webapp directory relative to `webapps`. Leave empty to deploy using the workspace folder name. For nested folders omit the leading slash (e.g. `web/jmics`)."
         },
+        "turbocat.useWorkspaceTomcatBase": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "markdownDescription": "Use a workspace-local `CATALINA_BASE` under the project so Tomcat configuration, deployed apps, logs, work, and temp files are isolated from other workspaces."
+        },
+        "turbocat.workspaceTomcatBasePath": {
+          "type": "string",
+          "default": ".vscode/turbocat",
+          "scope": "window",
+          "markdownDescription": "Workspace-relative path for TurboCat's project-local Tomcat base. Used only when `turbocat.useWorkspaceTomcatBase` is enabled."
+        },
         "turbocat.debugPort": {
           "type": "number",
           "default": 8000,
@@ -307,13 +331,14 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm install && npm run compile",
+    "vscode:prepublish": "npm run compile",
     "package": "npm run compile",
     "compile": "webpack --mode production",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "compile-tests": "tsc -p ./tsconfig.test.json",
+    "pretest": "npm run compile && npm run compile-tests && npm run lint",
     "lint": "eslint src --ext .ts",
-    "test": "node ./node_modules/@vscode/test-electron/out/runTest --extensionDevelopmentPath=. --extensionTestsPath=out/test/suite",
+    "test": "node ./scripts/run-tests.js",
     "coverage": "nyc --reporter=lcov npm test"
   },
   "devDependencies": {

@@ -14,6 +14,7 @@ type LogContext = 'general' | 'smartDeploy';
 export class Logger {
     private static instance: Logger;
     private tomcatHome: string;
+    private runtimeBase: string;
     private outputChannel: vscode.OutputChannel;
     private statusBarItem?: vscode.StatusBarItem;
 
@@ -42,6 +43,7 @@ export class Logger {
      */
     private constructor() {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
+        this.runtimeBase = this.tomcatHome;
         //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
         const config = vscode.workspace.getConfiguration('turbocat');
         this.logLevel = (config.get<string>('logLevel', 'INFO') || 'INFO').trim().toUpperCase();
@@ -80,6 +82,9 @@ export class Logger {
      */
     public updateConfig(): void {
         this.tomcatHome = vscode.workspace.getConfiguration().get<string>('turbocat.home', '');
+        if (!this.runtimeBase) {
+            this.runtimeBase = this.tomcatHome;
+        }
         //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
         const config = vscode.workspace.getConfiguration('turbocat');
         this.logLevel = (config.get<string>('logLevel', 'INFO') || 'INFO').trim().toUpperCase();
@@ -118,6 +123,11 @@ export class Logger {
         this.startLogFileWatcher();
     }
 
+    public setRuntimeBase(runtimeBase: string): void {
+        this.runtimeBase = runtimeBase;
+        this.startLogFileWatcher();
+    }
+
     /** Log info message */
     public info(message: string, showToast: boolean = false, context: LogContext = 'general'): void {
         this.log('INFO', message, showToast ? vscode.window.showInformationMessage : undefined, false, context);
@@ -153,14 +163,15 @@ export class Logger {
      * Start monitoring Tomcat log files
      */
     public startLogFileWatcher(): void {
-        if (!this.tomcatHome) {
+        const runtimeBase = this.runtimeBase || this.tomcatHome;
+        if (!runtimeBase) {
             return;
         }
 
-        const logsDir = path.join(this.tomcatHome, 'logs');
+        const logsDir = path.join(runtimeBase, 'logs');
         
         // Single real-time watcher for current log file
-        this.watchAccessLogDirectly(this.tomcatHome);
+        this.watchAccessLogDirectly(runtimeBase);
         // Lightweight directory watcher for log rotation detection only
         this.setupLogRotationWatcher(logsDir);
     }
@@ -195,7 +206,13 @@ export class Logger {
         this.accessLogWatcher?.close();
         this.accessLogWatcher = undefined;
 
-        const files = await fs.promises.readdir(logsDir);
+        let files: string[];
+        try {
+            files = await fs.promises.readdir(logsDir);
+        } catch {
+            return;
+        }
+
         const accessLogs = files.filter(f => accessLogPattern.test(f))
             .sort().reverse();
 
@@ -413,7 +430,7 @@ export class Logger {
             this.unifiedLogWatcher = fs.watch(logsDir, (eventType, filename) => {
                 if (filename && filename.startsWith('localhost_access_log.') && eventType === 'rename') {
                     // New log file detected (rotation) - re-attach real-time watcher
-                    this.watchAccessLogDirectly(this.tomcatHome);
+                    this.watchAccessLogDirectly(this.runtimeBase || this.tomcatHome);
                 }
             });
         } catch {
