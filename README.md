@@ -1,11 +1,11 @@
 # TurboCat – Apache Tomcat Extension for VS Code
 
-TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and predictable. The extension auto-detects your project layout, applies the right deployment strategy, and exposes one-click server controls with live feedback.
+TurboCat keeps Apache Tomcat development inside Visual Studio Code fast and predictable. It auto-detects your project layout, applies the right deployment strategy, and gives every workspace its own Tomcat runtime base so `server.xml`, logs, temp files, work files, and deployed apps stay isolated.
 
 ## Highlights
 - **Smart synchronization** – dual watchers keep static resources and compiled classes in sync with Tomcat, now with configurable filename bypass rules for temporary “copy” artifacts.
 - **Guided automation** – one-click commands start, stop, clean, or reload Tomcat and generate Java debug profiles when you need them.
-- **Workspace isolation** – project-local `CATALINA_BASE` config keeps `server.xml`, logs, temp files, and deployed apps separate from other workspaces.
+- **Tomcat config isolation** – every workspace can use its own `CATALINA_BASE`, keeping `server.xml`, logs, temp files, work files, and deployed apps separated from other projects.
 - **Unified diagnostics** – a single TurboCat output channel streams extension messages and Tomcat logs with consistent formatting.
 - **Zero guessing** – automatic detection locates Tomcat, the JDK, ports, and project type so you can stay focused on code.
 
@@ -41,14 +41,14 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
-| `turbocat.useWorkspaceTomcatBase` | Isolate Tomcat runtime files per workspace | Enabled by default; uses Tomcat's `CATALINA_BASE` support |
+| `turbocat.useWorkspaceTomcatBase` | Turn on workspace-local Tomcat config isolation | Enabled by default; uses Tomcat's `CATALINA_BASE` support so each project gets its own runtime base |
 | `turbocat.workspaceTomcatBasePath` | Workspace Tomcat base location | Defaults to `.vscode/turbocat` |
 | `turbocat.tomcatEnvironment` | Environment variables for standard starts | JSON object of key/value pairs applied to normal `TurboCat: Start` runs |
 | `turbocat.tomcatDebugEnvironment` | Debug-only environment overrides | Applied exclusively to `TurboCat: Start in Debug Mode`, leaving normal starts untouched |
 
-## Workspace Tomcat Config
+## Tomcat Config Isolation
 
-TurboCat uses your configured Tomcat installation as `CATALINA_HOME`, but by default creates a project-local `CATALINA_BASE` at `.vscode/turbocat`. That directory contains the mutable runtime files:
+TurboCat uses your configured Tomcat installation as `CATALINA_HOME`, but by default creates a project-local `CATALINA_BASE` at `.vscode/turbocat`. That means each workspace gets its own mutable runtime state while still sharing the same Tomcat installation:
 
 ```text
 .vscode/turbocat/
@@ -59,7 +59,7 @@ TurboCat uses your configured Tomcat installation as `CATALINA_HOME`, but by def
 └─ webapps/
 ```
 
-On first use, TurboCat copies missing files from `<tomcatHome>/conf` into `.vscode/turbocat/conf` and preserves files that already exist. Port updates, deployments, clean operations, and log watching use the workspace base, so one project can change `server.xml` or deploy a webapp without affecting another project using the same Tomcat installation.
+On first use, TurboCat copies missing files from `<tomcatHome>/conf` into `.vscode/turbocat/conf` and preserves files that already exist. Port updates, deployments, clean operations, and log watching all use the workspace base, so one project can change `server.xml` or deploy a webapp without affecting another project that shares the same Tomcat install.
 
 Set `turbocat.useWorkspaceTomcatBase` to `false` to use the Tomcat installation directory directly.
 

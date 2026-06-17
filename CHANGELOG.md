@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0]
+### Changed
+- Emphasised project-local Tomcat configuration isolation in the README and package metadata.
+- Updated the extension version to `1.2.0`.
+
 ## [1.0.4]
 ### Fixed
 - **Bug**: Extension log level filtering (`turbocat.logLevel`) now works correctly by robustifying configuration reading and level threshold lookup.
