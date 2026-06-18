@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { env } from 'vscode';
 import { glob } from 'glob';
 import { Tomcat } from './Tomcat';
@@ -1327,7 +1327,7 @@ export class Builder {
      * Check for compiled .class files and deploy them
      * Enhanced version that detects ALL related class files including inner classes
      */
-    private async checkAndDeployCompiledClass(_javaFilePath: string, className: string): Promise<void> {
+    private async checkAndDeployCompiledClass(javaFilePath: string, className: string): Promise<void> {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot || !this.projectStructure) {
             return;
@@ -1341,11 +1341,23 @@ export class Builder {
             return;
         }
 
+        // Derive the Java package from the source file path relative to the source root
+        let javaPackage = '';
+        const sourceRoots = this.projectStructure.javaSourceRoots || [];
+        for (const sourceRoot of sourceRoots) {
+            const absSourceRoot = path.join(workspaceRoot, sourceRoot);
+            if (javaFilePath.startsWith(absSourceRoot + path.sep)) {
+                const relativeToSource = path.relative(absSourceRoot, javaFilePath);
+                javaPackage = path.dirname(relativeToSource).replace(/\\/g, '/');
+                break;
+            }
+        }
+
         try {
             // Strategy 1: Find direct class file matches (including inner classes)
             const directMatches: string[] = [];
             for (const outputDir of existingOutputDirs) {
-                directMatches.push(...await this.findDirectClassMatches(outputDir, className));
+                directMatches.push(...await this.findDirectClassMatches(outputDir, className, javaPackage));
             }
 
             // Strategy 2: Find recently modified class files in the same package
@@ -1395,20 +1407,28 @@ export class Builder {
     /**
      * Find direct class file matches including inner classes and anonymous classes
      */
-    private async findDirectClassMatches(outputDir: string, className: string): Promise<string[]> {
+    private async findDirectClassMatches(outputDir: string, className: string, javaPackage?: string): Promise<string[]> {
         // Pattern to match:
         // - ClassName.class (main class)
         // - ClassName$InnerClass.class (inner classes)
         // - ClassName$1.class, ClassName$2.class (anonymous classes)
         // - ClassName$InnerClass$1.class (anonymous classes in inner classes)
+        //
+        // When javaPackage is provided, restrict the search to that package
+        // to avoid deploying identically-named classes from other packages.
+        const packageDir = javaPackage ? javaPackage.replace(/\\/g, '/') : '**';
         const patterns = [
-            `${outputDir}/**/${className}.class`,
-            `${outputDir}/**/${className}$*.class`
+            `${outputDir}/${packageDir}/${className}.class`,
+            `${outputDir}/${packageDir}/${className}$*.class`
         ];
 
         const matches: string[] = [];
         for (const pattern of patterns) {
-            const files = await glob(pattern);
+            const files = await glob(pattern, {
+                    nodir: true,
+                    windowsPathsNoEscape: process.platform === 'win32',
+                    absolute: true,
+                });
             matches.push(...files);
         }
 
@@ -2042,21 +2062,22 @@ export class Builder {
             const classpath = Array.from(classpathEntries).join(path.delimiter);
             const compileTargets = Array.from(javaFiles);
 
-            const escapeForCmd = (value: string) => `"${value.replace(/(["\\])/g, '\\$1')}"`;
-
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-javac-'));
             const argsFile = path.join(tempDir, 'sources.args');
             const argsFileContent = compileTargets
-                .map(filePath => escapeForCmd(filePath))
+                .map(filePath => `"${filePath.replace(/"/g, '\\"')}"`)
                 .join(os.EOL);
 
             fs.writeFileSync(argsFile, argsFileContent, 'utf8');
 
-            const encodingArg = this.compileEncoding ? ` -encoding ${escapeForCmd(this.compileEncoding)}` : '';
-            const cmd = `${escapeForCmd(javacPath)}${encodingArg} -d ${escapeForCmd(classesDir)} -cp ${escapeForCmd(classpath)} @${escapeForCmd(argsFile)}`;
+            const javacArgs: string[] = [];
+            if (this.compileEncoding) {
+                javacArgs.push('-encoding', this.compileEncoding);
+            }
+            javacArgs.push('-d', classesDir, '-cp', classpath, `@${argsFile}`);
 
             try {
-                await this.executeCommand(cmd, projectDir);
+                await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
             } finally {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
@@ -2294,6 +2315,32 @@ export class Builder {
                     return;
                 }
                 resolve();
+            });
+        });
+    }
+
+    /**
+     * Spawn-based command execution for commands with paths that may contain spaces.
+     * Passes arguments as an array so the shell does not misinterpret whitespace.
+     */
+    private async executeCommandSpawn(command: string, args: string[], cwd: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const child = spawn(command, args, {
+                cwd,
+                stdio: 'pipe',
+                shell: false
+            });
+            let stderr = '';
+            child.stderr.on('data', (data) => { stderr += data.toString(); });
+            child.on('close', (code) => {
+                if (code === 0) {
+                    resolve();
+                } else {
+                    reject(new Error(stderr.trim() || `Command exited with code \${code}`));
+                }
+            });
+            child.on('error', (err) => {
+                reject(err);
             });
         });
     }
@@ -2747,6 +2794,8 @@ export class Builder {
             .replace(/\?/g, '__QUESTION__')
             // Escape regex special characters
             .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            // Make **/<filename> match files at root level (zero directories)
+            .replace(/__DOUBLESTAR__\/__SINGLESTAR__/g, '(__DOUBLESTAR__/)?__SINGLESTAR__')
             // Convert glob placeholders to regex patterns
             .replace(/__DOUBLESTAR__/g, '.*')                    // ** -> match any characters including path separators
             .replace(/__SINGLESTAR__/g, `[^${pathSeparator}]*`)  // * -> match any characters except path separators  

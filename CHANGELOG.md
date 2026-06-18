@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0]
+### Fixed
+- **Path handling**: Tomcat stop command now uses `spawn` with argument arrays instead of `exec` with space-joined strings, so Tomcat/JDK installations under paths containing spaces (e.g. `C:\Program Files\…`) no longer fail to stop.
+- **Path handling**: `javac` compilation during Local deployments now uses `spawn` with `shell: false` instead of a manually-escaped command string, eliminating incorrect backslash-escaping that broke paths with spaces on Windows and doubled backslashes on Unix.
+- **Smart deploy**: `globToRegex` now correctly matches files placed directly in the watched root directory (e.g. `src/main/webapp/TestCode.jsp`) by making the `**/` directory portion optional, instead of requiring at least one subdirectory separator.
+- **Smart deploy**: `findDirectClassMatches` now derives the Java package from the source file path and restricts the class-file search to that package, preventing identically-named classes from unrelated packages from being deployed.
+- **Smart deploy**: `checkAndDeployCompiledClass` now extracts the package from the Java source path and passes it through to `findDirectClassMatches`, wiring the package-aware fix into the production code path.
+
 ## [1.2.0]
 ### Changed
 - Emphasised project-local Tomcat configuration isolation in the README and package metadata.

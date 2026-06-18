@@ -947,7 +947,7 @@ export class Tomcat {
 
             const child = spawn(command, args, {
                 stdio: 'pipe',
-                shell: process.platform === 'win32',
+                shell: false,
                 env: {
                     ...process.env,
                     CATALINA_HOME: tomcatHome,
@@ -1021,8 +1021,9 @@ export class Tomcat {
             });
         } else {
             const { command, args } = this.buildCommand(action, tomcatHome, javaHome, { catalinaBase });
-            const stopCommand = [command, ...args].join(' ');
-            await execAsync(stopCommand, {
+            const stopChild = spawn(command, args, {
+                stdio: 'pipe',
+                shell: false,
                 env: {
                     ...process.env,
                     CATALINA_HOME: tomcatHome,
@@ -1031,6 +1032,18 @@ export class Tomcat {
                     JRE_HOME: javaHome,
                     ...environment
                 }
+            });
+            await new Promise<void>((resolve, reject) => {
+                stopChild.on('close', (code) => {
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        reject(new Error(`Tomcat stop exited with code ${code}`));
+                    }
+                });
+                stopChild.on('error', (err) => {
+                    reject(err);
+                });
             });
         }
     }
