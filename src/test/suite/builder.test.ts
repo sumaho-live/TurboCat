@@ -84,10 +84,31 @@ describe('Builder Tests', () => {
       fs.writeFileSync(path.join(workspaceRoot, 'build.gradle'), 'plugins { id "war" }');
 
       const candidates = (builder as unknown as {
-        collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle'>;
+        collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'>;
       }).collectBuildCandidates(workspaceRoot);
 
       assert.deepStrictEqual(candidates, ['Local', 'Maven', 'Gradle']);
+    });
+
+    it('includes PreBuilt when pom.xml and target/classes exist', () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
+      fs.mkdirSync(path.join(workspaceRoot, 'target', 'classes'), { recursive: true });
+
+      const candidates = (builder as unknown as {
+        collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'>;
+      }).collectBuildCandidates(workspaceRoot);
+
+      assert.deepStrictEqual(candidates, ['Local', 'Maven', 'PreBuilt']);
+    });
+
+    it('does not include PreBuilt when target/classes is missing', () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
+
+      const candidates = (builder as unknown as {
+        collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'>;
+      }).collectBuildCandidates(workspaceRoot);
+
+      assert.deepStrictEqual(candidates, ['Local', 'Maven']);
     });
   });
 
@@ -128,6 +149,67 @@ describe('Builder Tests', () => {
       } finally {
         fs.rmSync(tomcatHome, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('mavenPreBuiltDeploy()', () => {
+    it('deploys pre-built classes and web resources without running mvn', async () => {
+      const tomcatHome = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-pb-test-'));
+      try {
+        fs.mkdirSync(path.join(tomcatHome, 'conf'), { recursive: true });
+        fs.writeFileSync(path.join(tomcatHome, 'conf', 'server.xml'), '<Server port="8005" />');
+        sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(tomcatHome);
+
+        // Set up Maven project
+        fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project><artifactId>test-app</artifactId></project>');
+
+        // Create pre-built classes
+        const classDir = path.join(workspaceRoot, 'target', 'classes', 'com', 'example');
+        fs.mkdirSync(classDir, { recursive: true });
+        fs.writeFileSync(path.join(classDir, 'Hello.class'), 'compiled-by-java-ls');
+
+        // Create web resource
+        const webappDir = path.join(workspaceRoot, 'src', 'main', 'webapp');
+        fs.mkdirSync(webappDir, { recursive: true });
+        fs.writeFileSync(path.join(webappDir, 'index.jsp'), '<html></html>');
+
+        // Set target dir (simulating webapps/ROOT)
+        const targetDir = path.join(workspaceRoot, '.vscode', 'turbocat', 'webapps', 'test-app');
+        (builder as unknown as { projectStructure: { type: string; javaOutputDir: string; javaSourceRoots: string[]; webResourceRoots: string[]; webappName: string; defaultWebappName: string } | undefined }).projectStructure = undefined;
+        sandbox.stub(builder as unknown as { detectProjectStructure(): { type: string; javaOutputDir: string; javaSourceRoots: string[]; webResourceRoots: string[]; webappName: string; defaultWebappName: string } }, 'detectProjectStructure').returns({
+          type: 'maven',
+          javaOutputDir: 'target/classes',
+          javaSourceRoots: ['src/main/java'],
+          webResourceRoots: ['src/main/webapp'],
+          webappName: 'test-app',
+          defaultWebappName: 'test-app'
+        });
+
+        await (builder as unknown as {
+          mavenPreBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
+        }).mavenPreBuiltDeploy(workspaceRoot, targetDir, tomcatHome);
+
+        // Verify web resource was deployed
+        assert.strictEqual(fs.existsSync(path.join(targetDir, 'index.jsp')), true);
+        // Verify class was deployed
+        assert.strictEqual(
+          fs.existsSync(path.join(targetDir, 'WEB-INF', 'classes', 'com', 'example', 'Hello.class')),
+          true
+        );
+      } finally {
+        fs.rmSync(tomcatHome, { recursive: true, force: true });
+      }
+    });
+
+    it('throws when target/classes is missing', async () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
+
+      await assert.rejects(
+        (builder as unknown as {
+          mavenPreBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
+        }).mavenPreBuiltDeploy(workspaceRoot, '/tmp/fake-target', '/tmp/fake-tomcat'),
+        /target.classes not found/
+      );
     });
   });
 

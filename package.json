@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with project-local configuration isolation and smart file synchronization for Java web projects",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -245,7 +245,8 @@
           "enum": [
             "Local",
             "Maven",
-            "Gradle"
+            "Gradle",
+            "PreBuilt"
           ],
           "default": "Local",
           "description": "Legacy fallback for the smart deploy watcher. Prefer turbocat.preferredBuildType for manual deployments."
@@ -256,10 +257,11 @@
             "Auto",
             "Local",
             "Maven",
-            "Gradle"
+            "Gradle",
+            "PreBuilt"
           ],
           "default": "Auto",
-          "description": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, or Gradle to force a specific pipeline."
+          "markdownDescription": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, Gradle, or PreBuilt to force a specific pipeline. PreBuilt skips `mvn` and deploys `target/classes` (compiled by the Java Language Server) + static web resources — ideal when Maven is not on PATH."
         },
         "turbocat.deployPath": {
           "type": "string",

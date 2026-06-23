@@ -516,7 +516,7 @@ export class Builder {
     private autoDeployMode: 'Disable' | 'Smart';
     private isDeploying = false;
     private attempts = 0;
-    private preferredBuildType: 'Auto' | 'Local' | 'Maven' | 'Gradle';
+    private preferredBuildType: 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
     private syncBypassPatterns: RegExp[] = [];
     
     // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
@@ -544,7 +544,7 @@ export class Builder {
     private constructor() {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
-        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
+        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
         this.loadSyncBypassPatterns();
         this.compileEncoding = this.resolveCompileEncoding();
     }
@@ -565,7 +565,7 @@ export class Builder {
     public updateConfig(): void {
         // Use smartDeploy setting
         this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
-        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle';
+        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
         this.loadSyncBypassPatterns();
         this.compileEncoding = this.resolveCompileEncoding();
         this.refreshEffectiveDeploymentTargets();
@@ -827,14 +827,14 @@ export class Builder {
      * @param type Build strategy ('Local' | 'Maven' | 'Gradle' | 'Choice')
      * @log Deployment progress and errors
      */
-    public async deploy(type: 'Local' | 'Maven' | 'Gradle' | 'Choice'): Promise<void> {
+    public async deploy(type: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt' | 'Choice'): Promise<void> {
         const projectDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!projectDir || !Builder.isJavaEEProject()) {
             await this.createNewProject();
             return;
         }
 
-        let buildType: 'Local' | 'Maven' | 'Gradle';
+        let buildType: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
         try {
             buildType = await this.resolveBuildType(type, projectDir);
         } catch (err) {
@@ -891,6 +891,10 @@ export class Builder {
                         progress.report({ message: 'Running Maven build...' });
                         await this.mavenDeploy(projectDir, targetDir);
                         break;
+                    case 'PreBuilt':
+                        progress.report({ message: 'Deploying pre-built classes + static resources...' });
+                        await this.mavenPreBuiltDeploy(projectDir, targetDir, tomcatHome, progress);
+                        break;
                     case 'Gradle':
                         progress.report({ message: 'Running Gradle build...' });
                         await this.gradleDeploy(projectDir, targetDir, appName);
@@ -927,9 +931,9 @@ export class Builder {
     }
 
     private async resolveBuildType(
-        requested: 'Local' | 'Maven' | 'Gradle' | 'Choice',
+        requested: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt' | 'Choice',
         projectDir: string
-    ): Promise<'Local' | 'Maven' | 'Gradle'> {
+    ): Promise<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> {
         if (requested !== 'Choice') {
             return requested;
         }
@@ -942,7 +946,7 @@ export class Builder {
         }
 
         const configuredFallback = vscode.workspace.getConfiguration('turbocat')
-            .get<'Local' | 'Maven' | 'Gradle'>('autoDeployBuildType', 'Local');
+            .get<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'>('autoDeployBuildType', 'Local');
 
         if (preferred === 'Auto' &&
             configuredFallback &&
@@ -965,24 +969,29 @@ export class Builder {
             throw new Error(Builder.DEPLOY_CANCELLED);
         }
 
-        const allowed: ReadonlyArray<'Local' | 'Maven' | 'Gradle'> = ['Local', 'Maven', 'Gradle'];
-        if (!allowed.includes(choice as 'Local' | 'Maven' | 'Gradle')) {
+        const allowed: ReadonlyArray<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> = ['Local', 'Maven', 'Gradle', 'PreBuilt'];
+        if (!allowed.includes(choice as 'Local' | 'Maven' | 'Gradle' | 'PreBuilt')) {
             throw new Error(`Unsupported build type selection: ${choice}`);
         }
 
-        const typedChoice = choice as 'Local' | 'Maven' | 'Gradle';
+        const typedChoice = choice as 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
         await this.persistPreferredBuildType(typedChoice);
         return typedChoice;
     }
 
-    private collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle'> {
-        const candidates: Array<'Local' | 'Maven' | 'Gradle'> = ['Local'];
+    private collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> {
+        const candidates: Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> = ['Local'];
         const hasPom = fs.existsSync(path.join(projectDir, 'pom.xml'));
         const hasGradle = fs.existsSync(path.join(projectDir, 'build.gradle')) ||
             fs.existsSync(path.join(projectDir, 'build.gradle.kts'));
 
         if (hasPom) {
             candidates.push('Maven');
+            // PreBuilt: available when pom.xml + target/classes exist (compiled by Java LS)
+            const hasPreBuiltClasses = fs.existsSync(path.join(projectDir, 'target', 'classes'));
+            if (hasPreBuiltClasses) {
+                candidates.push('PreBuilt');
+            }
         }
 
         if (hasGradle) {
@@ -992,7 +1001,7 @@ export class Builder {
         return candidates;
     }
 
-    private async persistPreferredBuildType(value: 'Local' | 'Maven' | 'Gradle'): Promise<void> {
+    private async persistPreferredBuildType(value: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt'): Promise<void> {
         this.preferredBuildType = value;
         await vscode.workspace.getConfiguration().update(
             'turbocat.preferredBuildType',
@@ -2169,6 +2178,78 @@ export class Builder {
         } catch (error) {
             smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
         }
+    }
+
+    /**
+     * PreBuilt Maven Deployment — uses pre-compiled target/classes + static web resources.
+     *
+     * Ideal when mvn is not on PATH or JAVA_HOME is not set globally,
+     * because the Java Language Server extension already compiles .java -> .class
+     * into target/classes on every save.
+     */
+    private async mavenPreBuiltDeploy(
+        projectDir: string,
+        targetDir: string,
+        _tomcatHome: string,
+        progress?: vscode.Progress<{ message?: string; increment?: number }>
+    ) {
+        const report = (message: string, increment?: number) => {
+            progress?.report({ message, increment });
+        };
+
+        if (!fs.existsSync(path.join(projectDir, 'pom.xml'))) {
+            throw new Error('pom.xml not found.');
+        }
+
+        report('Validating pre-built output...', 5);
+
+        const classesDir = path.join(projectDir, 'target', 'classes');
+        if (!fs.existsSync(classesDir)) {
+            throw new Error(
+                'target/classes not found. Build the project with the Java Language Server or run mvn compile first.'
+            );
+        }
+
+        report('Synchronizing web resources...', 20);
+        const structure = this.projectStructure ?? this.detectProjectStructure();
+        const webAppCandidates = [
+            ...(structure.webResourceRoots || []),
+            path.join('src', 'main', 'webapp')
+        ];
+        const webAppPath = this.findFirstExistingPath(projectDir, webAppCandidates);
+        if (webAppPath) {
+            this.brutalSync(webAppPath, targetDir, true);
+        }
+
+        report('Copying compiled classes...', 30);
+        const targetClassesDir = path.join(targetDir, 'WEB-INF', 'classes');
+        if (fs.existsSync(targetClassesDir)) {
+            fs.rmSync(targetClassesDir, { recursive: true, force: true });
+        }
+        this.copyDirectorySync(classesDir, targetClassesDir);
+
+        report('Synchronizing resources...', 15);
+        const resourceCandidates = ['src/main/resources'];
+        const resourcesPath = this.findFirstExistingPath(projectDir, resourceCandidates);
+        if (resourcesPath) {
+            this.brutalSync(resourcesPath, targetClassesDir);
+        }
+
+        report('Updating libraries...', 15);
+        const targetLibDir = path.join(targetDir, 'WEB-INF', 'lib');
+        const depLibDir = path.join(projectDir, 'target', 'dependency');
+        if (fs.existsSync(depLibDir)) {
+            this.brutalSync(depLibDir, targetLibDir);
+        }
+        const projectLibDir = path.join(projectDir, 'lib');
+        if (fs.existsSync(projectLibDir)) {
+            this.brutalSync(projectLibDir, targetLibDir);
+        }
+
+        report('Applying workspace mappings...', 10);
+        await this.applyLocalDeployMappings();
+
+        report('Pre-built deployment complete', 0);
     }
 
     /**

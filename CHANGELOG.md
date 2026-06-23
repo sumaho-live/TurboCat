@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0]
+### Added
+- **PreBuilt deployment mode**: new `turbocat.preferredBuildType` option `"PreBuilt"` skips `mvn clean package` and deploys `target/classes` (already compiled by the Java Language Server) + static web resources directly. Ideal when `mvn` is not on PATH or `JAVA_HOME` is not set globally. Appears as a QuickPick choice when `pom.xml` and `target/classes` both exist.
+
 ## [1.3.0]
 ### Fixed
 - **Path handling**: Tomcat stop command now uses `spawn` with argument arrays instead of `exec` with space-joined strings, so Tomcat/JDK installations under paths containing spaces (e.g. `C:\Program Files\…`) no longer fail to stop.
