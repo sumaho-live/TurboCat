@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0]
+### Added
+- **Smart deploy pause during manual deploy**: Smart deploy file watchers are now automatically paused when a manual deployment starts, and restored when it finishes (success, failure, or early exit). Prevents watcher conflicts during full deployments.
+- **Workspace-level JAVA_HOME**: new `turbocat.workspaceJavaHome` setting (`scope: "window"`) allows per-project JDK overrides. Takes precedence over the machine-level `turbocat.javaHome`.
+- **Eclipse WTP support**: `detectProjectStructure` now parses `.settings/org.eclipse.wst.common.component` to extract deployment mappings (web root, source roots, dependency libraries) for Eclipse WTP projects.
+- **Smart deploy visibility warning**: when `turbocat.showSmartDeployLog` is `false`, a warning is shown on initialization so users know debug details are hidden.
+
+### Fixed
+- **PreBuilt deploy bug**: removed a destructive resources sync step that was deleting class files immediately after they were copied.
+- **Maven without JAVA_HOME**: `mavenDeploy` now injects `JAVA_HOME` from TurboCat's detected JDK into the `mvn` subprocess when the system environment lacks it.
+- **Smart deploy log visibility**: when `showSmartDeployLog` is `false`, only `DEBUG` messages are now suppressed; `INFO`-level deployment confirmations remain visible (previously all messages below `WARN` were hidden).
+
 ## [1.4.0]
 ### Added
 - **PreBuilt deployment mode**: new `turbocat.preferredBuildType` option `"PreBuilt"` skips `mvn clean package` and deploys `target/classes` (already compiled by the Java Language Server) + static web resources directly. Ideal when `mvn` is not on PATH or `JAVA_HOME` is not set globally. Appears as a QuickPick choice when `pom.xml` and `target/classes` both exist.

@@ -3,16 +3,16 @@
  * Handles deployment strategies, project analysis, and smart auto-deployment
  */
 
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
-import { exec, spawn } from 'child_process';
-import { env } from 'vscode';
-import { glob } from 'glob';
-import { Tomcat } from './Tomcat';
-import { Logger } from './Logger';
-import { normalizeDeploymentPath } from '../utils/deploymentPath';
+import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs";
+import * as os from "os";
+import { exec, spawn } from "child_process";
+import { env } from "vscode";
+import { glob } from "glob";
+import { Tomcat } from "./Tomcat";
+import { Logger } from "./Logger";
+import { normalizeDeploymentPath } from "../utils/deploymentPath";
 // import { promisify } from 'util';
 
 // const execAsync = promisify(exec);
@@ -21,46 +21,49 @@ import { normalizeDeploymentPath } from '../utils/deploymentPath';
  * Interface for build tool configuration parsers
  */
 interface BuildConfigParser {
-    /**
-     * Check if current project is supported by this parser
-     */
-    isProjectSupported(): boolean;
+  /**
+   * Check if current project is supported by this parser
+   */
+  isProjectSupported(): boolean;
 
-    /**
-     * Parse and generate resource mappings from build configuration
-     */
-    parseResourceMappings(): Promise<SmartDeployMapping[]>;
+  /**
+   * Parse and generate resource mappings from build configuration
+   */
+  parseResourceMappings(): Promise<SmartDeployMapping[]>;
 
-    /**
-     * Parse output directories from build configuration
-     */
-    parseOutputDirectories(): Promise<string[]>;
+  /**
+   * Parse output directories from build configuration
+   */
+  parseOutputDirectories(): Promise<string[]>;
 
-    /**
-     * Parse webapp configuration
-     */
-    parseWebappConfiguration(): Promise<{ webappName: string; contextPath?: string; }>;
+  /**
+   * Parse webapp configuration
+   */
+  parseWebappConfiguration(): Promise<{
+    webappName: string;
+    contextPath?: string;
+  }>;
 }
 
 /**
  * Maven pom.xml configuration structure
  */
 interface MavenConfig {
-    artifactId?: string;
-    finalName?: string;
-    outputDirectory?: string;
-    resources?: Array<{
-        directory: string;
-        targetPath?: string;
-        excludes?: string[];
-        includes?: string[];
-    }>;
-    warConfig?: {
-        warSourceDirectory?: string;
-        webXml?: string;
-        excludes?: string[];
-        includes?: string[];
-    };
+  artifactId?: string;
+  finalName?: string;
+  outputDirectory?: string;
+  resources?: Array<{
+    directory: string;
+    targetPath?: string;
+    excludes?: string[];
+    includes?: string[];
+  }>;
+  warConfig?: {
+    warSourceDirectory?: string;
+    webXml?: string;
+    excludes?: string[];
+    includes?: string[];
+  };
 }
 
 /**
@@ -69,3172 +72,3842 @@ interface MavenConfig {
 const getTomcat = () => Tomcat.getInstance();
 const getLogger = () => Logger.getInstance();
 const smartLog = {
-    info: (message: string) => getLogger().info(message, false, 'smartDeploy'),
-    success: (message: string) => getLogger().success(message, false, 'smartDeploy'),
-    debug: (message: string) => getLogger().debug(message, false, 'smartDeploy'),
-    warn: (message: string) => getLogger().warn(message, false, 'smartDeploy'),
-    error: (message: string, detail?: Error | string) => getLogger().error(message, false, detail, 'smartDeploy')
+  info: (message: string) => getLogger().info(message, false, "smartDeploy"),
+  success: (message: string) =>
+    getLogger().success(message, false, "smartDeploy"),
+  debug: (message: string) => getLogger().debug(message, false, "smartDeploy"),
+  warn: (message: string) => getLogger().warn(message, false, "smartDeploy"),
+  error: (message: string, detail?: Error | string) =>
+    getLogger().error(message, false, detail, "smartDeploy"),
 };
 
 interface ProjectStructure {
-    type: 'maven' | 'gradle' | 'eclipse' | 'plain';
-    javaOutputDir: string;
-    javaSourceRoots: string[];
-    webResourceRoots: string[];
-    webappName: string;
-    defaultWebappName: string;
+  type: "maven" | "gradle" | "eclipse" | "plain";
+  javaOutputDir: string;
+  javaSourceRoots: string[];
+  webResourceRoots: string[];
+  webappName: string;
+  defaultWebappName: string;
 }
 
 /** Smart deploy file mapping configuration */
 interface SmartDeployMapping {
-    source: string; // Source pattern (glob)
-    destination: string; // Destination pattern (supports {relative} placeholder)
-    needsReload: boolean; // Whether this mapping requires Tomcat reload
-    description?: string; // Optional description
-    extensions?: string[]; // File extensions to include
-    excludeExtensions?: string[]; // File extensions to exclude
+  source: string; // Source pattern (glob)
+  destination: string; // Destination pattern (supports {relative} placeholder)
+  needsReload: boolean; // Whether this mapping requires Tomcat reload
+  description?: string; // Optional description
+  extensions?: string[]; // File extensions to include
+  excludeExtensions?: string[]; // File extensions to exclude
 }
 
 interface LocalDeployMapping {
-    source: string; // Directory or glob relative to workspace root
-    destination: string; // Destination relative to the deployed webapp root
-    description?: string;
-    enabled?: boolean;
-    needsReload?: boolean;
-    extensions?: string[];
-    excludeExtensions?: string[];
+  source: string; // Directory or glob relative to workspace root
+  destination: string; // Destination relative to the deployed webapp root
+  description?: string;
+  enabled?: boolean;
+  needsReload?: boolean;
+  extensions?: string[];
+  excludeExtensions?: string[];
 }
 
 interface SmartDeployConfig {
-    projectType: string; // Project type (maven, gradle, eclipse, plain)
-    webappName: string; // Tomcat webapp name  
-    mappings: SmartDeployMapping[]; // Array of file mappings
-    localDeploy?: {
-        mappings: LocalDeployMapping[];
-    };
-    settings: {
-        debounceTime: number; // Debounce time in milliseconds
-        enabled: boolean; // Enable/disable smart deploy
-        logLevel: 'debug' | 'info' | 'warn' | 'error'; // Log level for smart deploy
-    };
+  projectType: string; // Project type (maven, gradle, eclipse, plain)
+  webappName: string; // Tomcat webapp name
+  mappings: SmartDeployMapping[]; // Array of file mappings
+  localDeploy?: {
+    mappings: LocalDeployMapping[];
+  };
+  settings: {
+    debounceTime: number; // Debounce time in milliseconds
+    enabled: boolean; // Enable/disable smart deploy
+    logLevel: "debug" | "info" | "warn" | "error"; // Log level for smart deploy
+  };
 }
 
 /** Default mapping templates for different project types */
 const DEFAULT_MAPPINGS: Record<string, SmartDeployMapping[]> = {
-    maven: [
-        {
-            source: 'target/classes/**/*.class',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Java compiled classes',
-            extensions: ['.class']
-        },
-        {
-            source: 'src/main/webapp/**/*',
-            destination: '{relative}',
-            needsReload: false,
-            description: 'Static web resources',
-            excludeExtensions: ['.class', '.java']
-        },
-        {
-            source: 'src/main/resources/**/*',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Resource files',
-            excludeExtensions: ['.class', '.java']
-        }
-    ],
-    gradle: [
-        {
-            source: 'build/classes/java/main/**/*.class',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Java compiled classes',
-            extensions: ['.class']
-        },
-        {
-            source: 'src/main/webapp/**/*',
-            destination: '{relative}',
-            needsReload: false,
-            description: 'Static web resources',
-            excludeExtensions: ['.class', '.java']
-        },
-        {
-            source: 'src/main/resources/**/*',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Resource files',
-            excludeExtensions: ['.class', '.java']
-        }
-    ],
-    eclipse: [
-        {
-            source: 'bin/**/*.class',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Java compiled classes',
-            extensions: ['.class']
-        },
-        {
-            source: 'WebContent/**/*',
-            destination: '{relative}',
-            needsReload: false,
-            description: 'Static web resources',
-            excludeExtensions: ['.class', '.java']
-        }
-    ],
-    plain: [
-        {
-            source: 'bin/**/*.class',
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Java compiled classes',
-            extensions: ['.class']
-        },
-        {
-            source: 'web/**/*',
-            destination: '{relative}',
-            needsReload: false,
-            description: 'Static web resources',
-            excludeExtensions: ['.class', '.java']
-        }
-    ]
+  maven: [
+    {
+      source: "target/classes/**/*.class",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Java compiled classes",
+      extensions: [".class"],
+    },
+    {
+      source: "src/main/webapp/**/*",
+      destination: "{relative}",
+      needsReload: false,
+      description: "Static web resources",
+      excludeExtensions: [".class", ".java"],
+    },
+    {
+      source: "src/main/resources/**/*",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Resource files",
+      excludeExtensions: [".class", ".java"],
+    },
+  ],
+  gradle: [
+    {
+      source: "build/classes/java/main/**/*.class",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Java compiled classes",
+      extensions: [".class"],
+    },
+    {
+      source: "src/main/webapp/**/*",
+      destination: "{relative}",
+      needsReload: false,
+      description: "Static web resources",
+      excludeExtensions: [".class", ".java"],
+    },
+    {
+      source: "src/main/resources/**/*",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Resource files",
+      excludeExtensions: [".class", ".java"],
+    },
+  ],
+  eclipse: [
+    {
+      source: "bin/**/*.class",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Java compiled classes",
+      extensions: [".class"],
+    },
+    {
+      source: "WebContent/**/*",
+      destination: "{relative}",
+      needsReload: false,
+      description: "Static web resources",
+      excludeExtensions: [".class", ".java"],
+    },
+  ],
+  plain: [
+    {
+      source: "bin/**/*.class",
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Java compiled classes",
+      extensions: [".class"],
+    },
+    {
+      source: "web/**/*",
+      destination: "{relative}",
+      needsReload: false,
+      description: "Static web resources",
+      excludeExtensions: [".class", ".java"],
+    },
+  ],
 };
 
 /**
  * Maven Configuration Parser
- * 
+ *
  * Parses pom.xml to extract build configuration and generate smart deployment mappings
  */
 class MavenConfigParser implements BuildConfigParser {
-    private workspaceRoot: string;
-    private pomPath: string;
-    private mavenConfig?: MavenConfig;
+  private workspaceRoot: string;
+  private pomPath: string;
+  private mavenConfig?: MavenConfig;
 
-    constructor(workspaceRoot: string) {
-        this.workspaceRoot = workspaceRoot;
-        this.pomPath = path.join(workspaceRoot, 'pom.xml');
+  constructor(workspaceRoot: string) {
+    this.workspaceRoot = workspaceRoot;
+    this.pomPath = path.join(workspaceRoot, "pom.xml");
+  }
+
+  /**
+   * Check if Maven project is supported (pom.xml exists)
+   */
+  public isProjectSupported(): boolean {
+    return fs.existsSync(this.pomPath);
+  }
+
+  /**
+   * Parse Maven pom.xml and extract build configuration
+   */
+  private async parsePomXml(): Promise<MavenConfig> {
+    if (this.mavenConfig) {
+      return this.mavenConfig;
     }
 
-    /**
-     * Check if Maven project is supported (pom.xml exists)
-     */
-    public isProjectSupported(): boolean {
-        return fs.existsSync(this.pomPath);
+    if (!fs.existsSync(this.pomPath)) {
+      throw new Error("pom.xml not found");
     }
 
-    /**
-     * Parse Maven pom.xml and extract build configuration
-     */
-    private async parsePomXml(): Promise<MavenConfig> {
-        if (this.mavenConfig) {
-            return this.mavenConfig;
-        }
+    try {
+      const pomContent = fs.readFileSync(this.pomPath, "utf-8");
+      smartLog.debug("Parsing Maven pom.xml for build configuration...");
 
-        if (!fs.existsSync(this.pomPath)) {
-            throw new Error('pom.xml not found');
-        }
+      const config: MavenConfig = {};
 
-        try {
-            const pomContent = fs.readFileSync(this.pomPath, 'utf-8');
-            smartLog.debug('Parsing Maven pom.xml for build configuration...');
+      // Extract artifactId
+      const artifactIdMatch = pomContent.match(
+        /<artifactId>(.*?)<\/artifactId>/,
+      );
+      if (artifactIdMatch) {
+        config.artifactId = artifactIdMatch[1].trim();
+      }
 
-            const config: MavenConfig = {};
+      // Extract finalName (for WAR file naming)
+      const finalNameMatch = pomContent.match(/<finalName>(.*?)<\/finalName>/);
+      if (finalNameMatch) {
+        config.finalName = finalNameMatch[1].trim();
+      }
 
-            // Extract artifactId
-            const artifactIdMatch = pomContent.match(/<artifactId>(.*?)<\/artifactId>/);
-            if (artifactIdMatch) {
-                config.artifactId = artifactIdMatch[1].trim();
-            }
+      // Extract build outputDirectory
+      const outputDirMatch = pomContent.match(
+        /<outputDirectory>(.*?)<\/outputDirectory>/,
+      );
+      if (outputDirMatch) {
+        config.outputDirectory = outputDirMatch[1].trim();
+      } else {
+        config.outputDirectory = "target/classes"; // Maven default
+      }
 
-            // Extract finalName (for WAR file naming)
-            const finalNameMatch = pomContent.match(/<finalName>(.*?)<\/finalName>/);
-            if (finalNameMatch) {
-                config.finalName = finalNameMatch[1].trim();
-            }
+      // Parse resources configuration
+      config.resources = this.parseResourcesSection(pomContent);
 
-            // Extract build outputDirectory
-            const outputDirMatch = pomContent.match(/<outputDirectory>(.*?)<\/outputDirectory>/);
-            if (outputDirMatch) {
-                config.outputDirectory = outputDirMatch[1].trim();
-            } else {
-                config.outputDirectory = 'target/classes'; // Maven default
-            }
+      // Parse maven-war-plugin configuration
+      config.warConfig = this.parseWarPluginConfig(pomContent);
 
-            // Parse resources configuration
-            config.resources = this.parseResourcesSection(pomContent);
+      this.mavenConfig = config;
+      smartLog.debug(`Maven config parsed: ${JSON.stringify(config, null, 2)}`);
+      return config;
+    } catch (error) {
+      smartLog.error("Failed to parse pom.xml", error as string);
+      throw error;
+    }
+  }
 
-            // Parse maven-war-plugin configuration
-            config.warConfig = this.parseWarPluginConfig(pomContent);
+  /**
+   * Parse <resources> section from pom.xml
+   */
+  private parseResourcesSection(pomContent: string): Array<{
+    directory: string;
+    targetPath?: string;
+    excludes?: string[];
+    includes?: string[];
+  }> {
+    const resources: Array<{
+      directory: string;
+      targetPath?: string;
+      excludes?: string[];
+      includes?: string[];
+    }> = [];
 
-            this.mavenConfig = config;
-            smartLog.debug(`Maven config parsed: ${JSON.stringify(config, null, 2)}`);
-            return config;
-
-        } catch (error) {
-            smartLog.error('Failed to parse pom.xml', error as string);
-            throw error;
-        }
+    // Match resources section
+    const resourcesMatch = pomContent.match(
+      /<resources>([\s\S]*?)<\/resources>/,
+    );
+    if (!resourcesMatch) {
+      // Default Maven resources if not explicitly configured
+      return [
+        {
+          directory: "src/main/resources",
+          targetPath: undefined, // Default to classes root
+        },
+      ];
     }
 
-    /**
-     * Parse <resources> section from pom.xml
-     */
-    private parseResourcesSection(pomContent: string): Array<{ directory: string; targetPath?: string; excludes?: string[]; includes?: string[]; }> {
-        const resources: Array<{ directory: string; targetPath?: string; excludes?: string[]; includes?: string[]; }> = [];
-        
-        // Match resources section
-        const resourcesMatch = pomContent.match(/<resources>([\s\S]*?)<\/resources>/);
-        if (!resourcesMatch) {
-            // Default Maven resources if not explicitly configured
-            return [{
-                directory: 'src/main/resources',
-                targetPath: undefined // Default to classes root
-            }];
-        }
+    const resourcesContent = resourcesMatch[1];
 
-        const resourcesContent = resourcesMatch[1];
-        
-        // Find all <resource> entries
-        const resourceMatches = resourcesContent.matchAll(/<resource>([\s\S]*?)<\/resource>/g);
-        
-        for (const resourceMatch of resourceMatches) {
-            const resourceContent = resourceMatch[1];
-            const resource: { directory: string; targetPath?: string; excludes?: string[]; includes?: string[]; } = {
-                directory: ''
-            };
+    // Find all <resource> entries
+    const resourceMatches = resourcesContent.matchAll(
+      /<resource>([\s\S]*?)<\/resource>/g,
+    );
 
-            // Extract directory
-            const dirMatch = resourceContent.match(/<directory>(.*?)<\/directory>/);
-            if (dirMatch) {
-                resource.directory = dirMatch[1].trim();
-            }
+    for (const resourceMatch of resourceMatches) {
+      const resourceContent = resourceMatch[1];
+      const resource: {
+        directory: string;
+        targetPath?: string;
+        excludes?: string[];
+        includes?: string[];
+      } = {
+        directory: "",
+      };
 
-            // Extract targetPath
-            const targetMatch = resourceContent.match(/<targetPath>(.*?)<\/targetPath>/);
-            if (targetMatch) {
-                resource.targetPath = targetMatch[1].trim();
-            }
+      // Extract directory
+      const dirMatch = resourceContent.match(/<directory>(.*?)<\/directory>/);
+      if (dirMatch) {
+        resource.directory = dirMatch[1].trim();
+      }
 
-            // Extract excludes
-            const excludesMatch = resourceContent.match(/<excludes>([\s\S]*?)<\/excludes>/);
-            if (excludesMatch) {
-                const excludeMatches = excludesMatch[1].matchAll(/<exclude>(.*?)<\/exclude>/g);
-                resource.excludes = Array.from(excludeMatches, match => match[1].trim());
-            }
+      // Extract targetPath
+      const targetMatch = resourceContent.match(
+        /<targetPath>(.*?)<\/targetPath>/,
+      );
+      if (targetMatch) {
+        resource.targetPath = targetMatch[1].trim();
+      }
 
-            // Extract includes
-            const includesMatch = resourceContent.match(/<includes>([\s\S]*?)<\/includes>/);
-            if (includesMatch) {
-                const includeMatches = includesMatch[1].matchAll(/<include>(.*?)<\/include>/g);
-                resource.includes = Array.from(includeMatches, match => match[1].trim());
-            }
+      // Extract excludes
+      const excludesMatch = resourceContent.match(
+        /<excludes>([\s\S]*?)<\/excludes>/,
+      );
+      if (excludesMatch) {
+        const excludeMatches = excludesMatch[1].matchAll(
+          /<exclude>(.*?)<\/exclude>/g,
+        );
+        resource.excludes = Array.from(excludeMatches, (match) =>
+          match[1].trim(),
+        );
+      }
 
-            if (resource.directory) {
-                resources.push(resource);
-            }
-        }
+      // Extract includes
+      const includesMatch = resourceContent.match(
+        /<includes>([\s\S]*?)<\/includes>/,
+      );
+      if (includesMatch) {
+        const includeMatches = includesMatch[1].matchAll(
+          /<include>(.*?)<\/include>/g,
+        );
+        resource.includes = Array.from(includeMatches, (match) =>
+          match[1].trim(),
+        );
+      }
 
-        return resources.length > 0 ? resources : [{
-            directory: 'src/main/resources',
-            targetPath: undefined
-        }];
+      if (resource.directory) {
+        resources.push(resource);
+      }
     }
 
-    /**
-     * Parse maven-war-plugin configuration
-     */
-    private parseWarPluginConfig(pomContent: string): { warSourceDirectory?: string; webXml?: string; excludes?: string[]; includes?: string[]; } | undefined {
-        // Find maven-war-plugin configuration
-        const warPluginMatch = pomContent.match(/<plugin>[\s\S]*?<groupId>org\.apache\.maven\.plugins<\/groupId>[\s\S]*?<artifactId>maven-war-plugin<\/artifactId>[\s\S]*?<\/plugin>/);
-        
-        if (!warPluginMatch) {
-            return {
-                warSourceDirectory: 'src/main/webapp' // Maven default
-            };
-        }
+    return resources.length > 0
+      ? resources
+      : [
+          {
+            directory: "src/main/resources",
+            targetPath: undefined,
+          },
+        ];
+  }
 
-        const pluginContent = warPluginMatch[0];
-        const warConfig: { warSourceDirectory?: string; webXml?: string; excludes?: string[]; includes?: string[]; } = {};
+  /**
+   * Parse maven-war-plugin configuration
+   */
+  private parseWarPluginConfig(pomContent: string):
+    | {
+        warSourceDirectory?: string;
+        webXml?: string;
+        excludes?: string[];
+        includes?: string[];
+      }
+    | undefined {
+    // Find maven-war-plugin configuration
+    const warPluginMatch = pomContent.match(
+      /<plugin>[\s\S]*?<groupId>org\.apache\.maven\.plugins<\/groupId>[\s\S]*?<artifactId>maven-war-plugin<\/artifactId>[\s\S]*?<\/plugin>/,
+    );
 
-        // Extract warSourceDirectory
-        const warSourceMatch = pluginContent.match(/<warSourceDirectory>(.*?)<\/warSourceDirectory>/);
-        if (warSourceMatch) {
-            warConfig.warSourceDirectory = warSourceMatch[1].trim();
-        } else {
-            warConfig.warSourceDirectory = 'src/main/webapp';
-        }
-
-        // Extract webXml path
-        const webXmlMatch = pluginContent.match(/<webXml>(.*?)<\/webXml>/);
-        if (webXmlMatch) {
-            warConfig.webXml = webXmlMatch[1].trim();
-        }
-
-        return warConfig;
+    if (!warPluginMatch) {
+      return {
+        warSourceDirectory: "src/main/webapp", // Maven default
+      };
     }
 
-    /**
-     * Generate resource mappings from Maven configuration
-     */
-    public async parseResourceMappings(): Promise<SmartDeployMapping[]> {
-        const config = await this.parsePomXml();
-        const mappings: SmartDeployMapping[] = [];
+    const pluginContent = warPluginMatch[0];
+    const warConfig: {
+      warSourceDirectory?: string;
+      webXml?: string;
+      excludes?: string[];
+      includes?: string[];
+    } = {};
 
-        // 1. Java compiled classes mapping
-        const outputDir = config.outputDirectory || 'target/classes';
+    // Extract warSourceDirectory
+    const warSourceMatch = pluginContent.match(
+      /<warSourceDirectory>(.*?)<\/warSourceDirectory>/,
+    );
+    if (warSourceMatch) {
+      warConfig.warSourceDirectory = warSourceMatch[1].trim();
+    } else {
+      warConfig.warSourceDirectory = "src/main/webapp";
+    }
+
+    // Extract webXml path
+    const webXmlMatch = pluginContent.match(/<webXml>(.*?)<\/webXml>/);
+    if (webXmlMatch) {
+      warConfig.webXml = webXmlMatch[1].trim();
+    }
+
+    return warConfig;
+  }
+
+  /**
+   * Generate resource mappings from Maven configuration
+   */
+  public async parseResourceMappings(): Promise<SmartDeployMapping[]> {
+    const config = await this.parsePomXml();
+    const mappings: SmartDeployMapping[] = [];
+
+    // 1. Java compiled classes mapping
+    const outputDir = config.outputDirectory || "target/classes";
+    mappings.push({
+      source: `${outputDir}/**/*.class`,
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Maven compiled Java classes",
+      extensions: [".class"],
+    });
+
+    // 2. Resources mappings
+    if (config.resources) {
+      for (const resource of config.resources) {
+        const targetPath = resource.targetPath || "WEB-INF/classes";
+
         mappings.push({
-            source: `${outputDir}/**/*.class`,
-            destination: 'WEB-INF/classes/{relative}',
-            needsReload: true,
-            description: 'Maven compiled Java classes',
-            extensions: ['.class']
+          source: `${resource.directory}/**/*`,
+          destination: `${targetPath}/{relative}`,
+          needsReload: true,
+          description: `Maven resource: ${resource.directory}`,
+          excludeExtensions: [".java", ".class"],
         });
+      }
+    }
 
-        // 2. Resources mappings
-        if (config.resources) {
-            for (const resource of config.resources) {
-                const targetPath = resource.targetPath || 'WEB-INF/classes';
-                
-                mappings.push({
-                    source: `${resource.directory}/**/*`,
-                    destination: `${targetPath}/{relative}`,
-                    needsReload: true,
-                    description: `Maven resource: ${resource.directory}`,
-                    excludeExtensions: ['.java', '.class']
-                });
-            }
-        }
+    // 3. Web application resources mapping
+    const warSourceDir =
+      config.warConfig?.warSourceDirectory || "src/main/webapp";
+    mappings.push({
+      source: `${warSourceDir}/**/*`,
+      destination: "{relative}",
+      needsReload: false,
+      description: "Maven webapp resources",
+      excludeExtensions: [".java", ".class"],
+    });
 
-        // 3. Web application resources mapping
-        const warSourceDir = config.warConfig?.warSourceDirectory || 'src/main/webapp';
-        mappings.push({
-            source: `${warSourceDir}/**/*`,
-            destination: '{relative}',
-            needsReload: false,
-            description: 'Maven webapp resources',
-            excludeExtensions: ['.java', '.class']
+    smartLog.debug(`Generated ${mappings.length} mappings from Maven pom.xml`);
+    return mappings;
+  }
+
+  /**
+   * Parse output directories from Maven configuration
+   */
+  public async parseOutputDirectories(): Promise<string[]> {
+    const config = await this.parsePomXml();
+    const directories = [config.outputDirectory || "target/classes"];
+
+    if (config.resources) {
+      directories.push(...config.resources.map((r) => r.directory));
+    }
+
+    return directories;
+  }
+
+  /**
+   * Parse webapp configuration
+   */
+  public async parseWebappConfiguration(): Promise<{
+    webappName: string;
+    contextPath?: string;
+  }> {
+    const config = await this.parsePomXml();
+
+    // Use finalName if specified, otherwise use artifactId, fallback to directory name
+    const webappName =
+      config.finalName ||
+      config.artifactId ||
+      path.basename(this.workspaceRoot);
+
+    return {
+      webappName,
+      contextPath: `/${webappName}`,
+    };
+  }
+
+  /**
+   * Debug method: Print Maven configuration analysis
+   */
+  public async debugMavenConfiguration(): Promise<void> {
+    smartLog.info("🔍 === Maven Configuration Debug ===");
+
+    if (!this.isProjectSupported()) {
+      smartLog.warn("❌ Maven project not supported - pom.xml not found");
+      return;
+    }
+
+    try {
+      const config = await this.parsePomXml();
+      smartLog.info(`📋 Maven Configuration:`);
+      smartLog.info(`   - ArtifactId: ${config.artifactId || "Not specified"}`);
+      smartLog.info(`   - FinalName: ${config.finalName || "Not specified"}`);
+      smartLog.info(
+        `   - OutputDirectory: ${config.outputDirectory || "target/classes (default)"}`,
+      );
+      smartLog.info(
+        `   - Resources: ${config.resources ? config.resources.length : 0} entries`,
+      );
+
+      if (config.resources) {
+        config.resources.forEach((resource, index) => {
+          smartLog.info(
+            `     Resource ${index + 1}: ${resource.directory} → ${resource.targetPath || "classes root"}`,
+          );
         });
+      }
 
-        smartLog.debug(`Generated ${mappings.length} mappings from Maven pom.xml`);
-        return mappings;
+      smartLog.info(
+        `   - War Source Directory: ${config.warConfig?.warSourceDirectory || "src/main/webapp (default)"}`,
+      );
+
+      const mappings = await this.parseResourceMappings();
+      smartLog.info(`🎯 Generated ${mappings.length} deployment mappings:`);
+      mappings.forEach((mapping, index) => {
+        smartLog.info(
+          `   Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`,
+        );
+      });
+
+      const webappConfig = await this.parseWebappConfiguration();
+      smartLog.info(`🌐 Webapp Configuration:`);
+      smartLog.info(`   - WebappName: ${webappConfig.webappName}`);
+      smartLog.info(`   - ContextPath: ${webappConfig.contextPath}`);
+    } catch (error) {
+      smartLog.error("Maven configuration debug failed", error as string);
     }
 
-    /**
-     * Parse output directories from Maven configuration
-     */
-    public async parseOutputDirectories(): Promise<string[]> {
-        const config = await this.parsePomXml();
-        const directories = [config.outputDirectory || 'target/classes'];
-        
-        if (config.resources) {
-            directories.push(...config.resources.map(r => r.directory));
-        }
-        
-        return directories;
-    }
-
-    /**
-     * Parse webapp configuration
-     */
-    public async parseWebappConfiguration(): Promise<{ webappName: string; contextPath?: string; }> {
-        const config = await this.parsePomXml();
-        
-        // Use finalName if specified, otherwise use artifactId, fallback to directory name
-        const webappName = config.finalName || 
-                          config.artifactId || 
-                          path.basename(this.workspaceRoot);
-        
-        return {
-            webappName,
-            contextPath: `/${webappName}`
-        };
-    }
-
-    /**
-     * Debug method: Print Maven configuration analysis
-     */
-    public async debugMavenConfiguration(): Promise<void> {
-        smartLog.info('🔍 === Maven Configuration Debug ===');
-        
-        if (!this.isProjectSupported()) {
-            smartLog.warn('❌ Maven project not supported - pom.xml not found');
-            return;
-        }
-
-        try {
-            const config = await this.parsePomXml();
-            smartLog.info(`📋 Maven Configuration:`);
-            smartLog.info(`   - ArtifactId: ${config.artifactId || 'Not specified'}`);
-            smartLog.info(`   - FinalName: ${config.finalName || 'Not specified'}`);
-            smartLog.info(`   - OutputDirectory: ${config.outputDirectory || 'target/classes (default)'}`);
-            smartLog.info(`   - Resources: ${config.resources ? config.resources.length : 0} entries`);
-            
-            if (config.resources) {
-                config.resources.forEach((resource, index) => {
-                    smartLog.info(`     Resource ${index + 1}: ${resource.directory} → ${resource.targetPath || 'classes root'}`);
-                });
-            }
-
-            smartLog.info(`   - War Source Directory: ${config.warConfig?.warSourceDirectory || 'src/main/webapp (default)'}`);
-
-            const mappings = await this.parseResourceMappings();
-            smartLog.info(`🎯 Generated ${mappings.length} deployment mappings:`);
-            mappings.forEach((mapping, index) => {
-                smartLog.info(`   Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`);
-            });
-
-            const webappConfig = await this.parseWebappConfiguration();
-            smartLog.info(`🌐 Webapp Configuration:`);
-            smartLog.info(`   - WebappName: ${webappConfig.webappName}`);
-            smartLog.info(`   - ContextPath: ${webappConfig.contextPath}`);
-
-        } catch (error) {
-            smartLog.error('Maven configuration debug failed', error as string);
-        }
-
-        smartLog.info('🔍 === End Maven Configuration Debug ===');
-    }
+    smartLog.info("🔍 === End Maven Configuration Debug ===");
+  }
 }
 
 /**
  * Compiled mapping for runtime efficiency
  */
 interface CompiledMapping extends SmartDeployMapping {
-    /** Absolute source pattern */
-    absoluteSource: string;
-    /** Absolute destination path template */
-    absoluteDestination: string;
-    /** Compiled regex for source matching */
-    sourceRegex: RegExp;
-    /** Source of the mapping configuration */
-    origin: 'smart' | 'local';
+  /** Absolute source pattern */
+  absoluteSource: string;
+  /** Absolute destination path template */
+  absoluteDestination: string;
+  /** Compiled regex for source matching */
+  sourceRegex: RegExp;
+  /** Source of the mapping configuration */
+  origin: "smart" | "local";
 }
 
 export class Builder {
-    private static instance: Builder;
-    private autoDeployMode: 'Disable' | 'Smart';
-    private isDeploying = false;
-    private attempts = 0;
-    private preferredBuildType: 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
-    private syncBypassPatterns: RegExp[] = [];
-    
-    // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
-    private fileWatchers: vscode.FileSystemWatcher[] = []; // Contains both static and compiled file watchers
-    
-    // Batch processing for compiled files
-    private batchDeploymentTimer?: NodeJS.Timeout; // Global batch timer
-    private pendingCompiledFiles = new Set<string>(); // Files waiting for batch deployment
-    
-    private projectStructure?: ProjectStructure;
-    private smartDeployConfig?: SmartDeployConfig;
-    private compiledMappings?: CompiledMapping[];
-    private compileEncoding: string;
-    private defaultSmartDeployWebappName?: string;
+  private static instance: Builder;
+  private autoDeployMode: "Disable" | "Smart";
+  private isDeploying = false;
+  private attempts = 0;
+  private preferredBuildType:
+    "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
+  private syncBypassPatterns: RegExp[] = [];
 
+  // Enhanced Smart deploy properties (dual-watcher architecture with batch processing)
+  private fileWatchers: vscode.FileSystemWatcher[] = []; // Contains both static and compiled file watchers
 
+  // Batch processing for compiled files
+  private batchDeploymentTimer?: NodeJS.Timeout; // Global batch timer
+  private pendingCompiledFiles = new Set<string>(); // Files waiting for batch deployment
 
-    // Configuration file name (legacy, kept for reference)
-    private static readonly CONFIG_FILE = '.vscode/tomcat-smart-deploy.json';
-    private static readonly DEPLOY_CANCELLED = 'TurboCat deployment cancelled';
+  private projectStructure?: ProjectStructure;
+  private smartDeployConfig?: SmartDeployConfig;
+  private compiledMappings?: CompiledMapping[];
+  private compileEncoding: string;
+  private defaultSmartDeployWebappName?: string;
 
-    /**
-     * Private constructor - initialize configuration and state
-     */
-    private constructor() {
-        // Use smartDeploy setting
-        this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
-        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
-        this.loadSyncBypassPatterns();
-        this.compileEncoding = this.resolveCompileEncoding();
+  // Configuration file name (legacy, kept for reference)
+  private static readonly CONFIG_FILE = ".vscode/tomcat-smart-deploy.json";
+  private static readonly DEPLOY_CANCELLED = "TurboCat deployment cancelled";
+
+  /**
+   * Private constructor - initialize configuration and state
+   */
+  private constructor() {
+    // Use smartDeploy setting
+    this.autoDeployMode = vscode.workspace
+      .getConfiguration()
+      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
+    this.preferredBuildType = vscode.workspace
+      .getConfiguration()
+      .get("turbocat.preferredBuildType", "Auto") as
+      "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
+    this.loadSyncBypassPatterns();
+    this.compileEncoding = this.resolveCompileEncoding();
+  }
+
+  /**
+   * Get singleton Builder instance
+   */
+  public static getInstance(): Builder {
+    if (!Builder.instance) {
+      Builder.instance = new Builder();
+    }
+    return Builder.instance;
+  }
+
+  /**
+   * Update configuration from workspace settings
+   */
+  public updateConfig(): void {
+    // Use smartDeploy setting
+    this.autoDeployMode = vscode.workspace
+      .getConfiguration()
+      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
+    this.preferredBuildType = vscode.workspace
+      .getConfiguration()
+      .get("turbocat.preferredBuildType", "Auto") as
+      "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
+    this.loadSyncBypassPatterns();
+    this.compileEncoding = this.resolveCompileEncoding();
+    this.refreshEffectiveDeploymentTargets();
+  }
+
+  /**
+   * Ensure a local deploy configuration template exists for plain/Eclipse projects.
+   */
+  public async ensureLocalConfigTemplate(): Promise<void> {
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        return;
+      }
+
+      const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
+      this.projectStructure = this.detectProjectStructure();
+
+      if (!["plain", "eclipse"].includes(this.projectStructure.type)) {
+        return;
+      }
+
+      if (fs.existsSync(configPath)) {
+        return;
+      }
+
+      this.smartDeployConfig = await this.loadSmartDeployConfig();
+    } catch (error) {
+      smartLog.debug(`Skipped creating local config template: ${error}`);
+    }
+  }
+
+  /**
+   * Load filename bypass patterns for smart deploy synchronization
+   */
+  private loadSyncBypassPatterns(): void {
+    const raw =
+      vscode.workspace
+        .getConfiguration("turbocat")
+        .get<string>("syncBypassPatterns", "copy,副本,コピー,копия") || "";
+    const patterns = raw
+      .split(",")
+      .map((pattern) => pattern.trim())
+      .filter(Boolean)
+      .map(
+        (pattern) =>
+          new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+      );
+
+    this.syncBypassPatterns = patterns;
+    smartLog.debug(
+      `Sync bypass patterns: ${patterns.map((regex) => regex.source).join(", ") || "none"}`,
+    );
+  }
+
+  /**
+   * Resolve the effective web application name using the workspace configuration override.
+   */
+  private resolveWebappName(defaultName?: string): string {
+    const override = getTomcat().getConfiguredDeploymentPath();
+    if (override) {
+      return override;
     }
 
-    /**
-     * Get singleton Builder instance
-     */
-    public static getInstance(): Builder {
-        if (!Builder.instance) {
-            Builder.instance = new Builder();
-        }
-        return Builder.instance;
+    const candidate = (defaultName ?? "").trim();
+    if (candidate) {
+      return normalizeDeploymentPath(candidate);
     }
 
-    /**
-     * Update configuration from workspace settings
-     */
-    public updateConfig(): void {
-        // Use smartDeploy setting
-        this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
-        this.preferredBuildType = vscode.workspace.getConfiguration().get('turbocat.preferredBuildType', 'Auto') as 'Auto' | 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
-        this.loadSyncBypassPatterns();
-        this.compileEncoding = this.resolveCompileEncoding();
-        this.refreshEffectiveDeploymentTargets();
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (workspaceRoot) {
+      return path.basename(workspaceRoot);
     }
 
-    /**
-     * Ensure a local deploy configuration template exists for plain/Eclipse projects.
-     */
-    public async ensureLocalConfigTemplate(): Promise<void> {
-        try {
-            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-            if (!workspaceRoot) {
-                return;
-            }
+    return "ROOT";
+  }
 
-            const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
-            this.projectStructure = this.detectProjectStructure();
-
-            if (!['plain', 'eclipse'].includes(this.projectStructure.type)) {
-                return;
-            }
-
-            if (fs.existsSync(configPath)) {
-                return;
-            }
-
-            this.smartDeployConfig = await this.loadSmartDeployConfig();
-        } catch (error) {
-            smartLog.debug(`Skipped creating local config template: ${error}`);
-        }
+  /**
+   * Resolve the javac encoding flag from user configuration with basic validation.
+   */
+  private resolveCompileEncoding(): string {
+    const configured =
+      vscode.workspace
+        .getConfiguration("turbocat")
+        .get<string>("compileEncoding", "UTF-8") || "UTF-8";
+    const value = configured.trim();
+    if (!value) {
+      return "UTF-8";
     }
 
-    /**
-     * Load filename bypass patterns for smart deploy synchronization
-     */
-    private loadSyncBypassPatterns(): void {
-        const raw = vscode.workspace.getConfiguration('turbocat').get<string>('syncBypassPatterns', 'copy,副本,コピー,копия') || '';
-        const patterns = raw.split(',')
-            .map(pattern => pattern.trim())
-            .filter(Boolean)
-            .map(pattern => new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-
-        this.syncBypassPatterns = patterns;
-        smartLog.debug(`Sync bypass patterns: ${patterns.map(regex => regex.source).join(', ') || 'none'}`);
+    const isSafe = /^[\w.\-]+$/i.test(value);
+    if (!isSafe) {
+      getLogger().warn(
+        `Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`,
+      );
+      return "UTF-8";
     }
 
-    /**
-     * Resolve the effective web application name using the workspace configuration override.
-     */
-    private resolveWebappName(defaultName?: string): string {
-        const override = getTomcat().getConfiguredDeploymentPath();
-        if (override) {
-            return override;
-        }
+    return value;
+  }
 
-        const candidate = (defaultName ?? '').trim();
-        if (candidate) {
-            return normalizeDeploymentPath(candidate);
-        }
-
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (workspaceRoot) {
-            return path.basename(workspaceRoot);
-        }
-
-        return 'ROOT';
+  /**
+   * Refresh cached deployment targets using the latest workspace configuration override.
+   */
+  private refreshEffectiveDeploymentTargets(): void {
+    if (this.projectStructure) {
+      this.projectStructure.webappName = this.resolveWebappName(
+        this.projectStructure.defaultWebappName,
+      );
     }
 
-    /**
-     * Resolve the javac encoding flag from user configuration with basic validation.
-     */
-    private resolveCompileEncoding(): string {
-        const configured = vscode.workspace.getConfiguration('turbocat').get<string>('compileEncoding', 'UTF-8') || 'UTF-8';
-        const value = configured.trim();
-        if (!value) {
-            return 'UTF-8';
-        }
+    if (this.smartDeployConfig) {
+      const baseName =
+        this.defaultSmartDeployWebappName ?? this.smartDeployConfig.webappName;
+      this.smartDeployConfig.webappName = this.resolveWebappName(baseName);
+    }
+  }
 
-        const isSafe = /^[\w.\-]+$/i.test(value);
-        if (!isSafe) {
-            getLogger().warn(`Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`);
-            return 'UTF-8';
-        }
-
-        return value;
+  /**
+   * Java EE Project Detection
+   *
+   * Comprehensive project structure analysis implementing:
+   * 1. Standard directory layout verification
+   * 2. Web application descriptor detection
+   * 3. Build system configuration analysis
+   * 4. Existing artifact inspection
+   * 5. Framework signature detection
+   *
+   * @returns Boolean indicating Java EE project validity
+   */
+  public static isJavaEEProject(): boolean {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      return false;
     }
 
-    /**
-     * Refresh cached deployment targets using the latest workspace configuration override.
-     */
-    private refreshEffectiveDeploymentTargets(): void {
-        if (this.projectStructure) {
-            this.projectStructure.webappName = this.resolveWebappName(this.projectStructure.defaultWebappName);
-        }
+    const rootPath = workspaceFolders[0].uri.fsPath;
+    const webInfPath = path.join(rootPath, "src", "main", "webapp", "WEB-INF");
 
-        if (this.smartDeployConfig) {
-            const baseName = this.defaultSmartDeployWebappName ?? this.smartDeployConfig.webappName;
-            this.smartDeployConfig.webappName = this.resolveWebappName(baseName);
-        }
+    if (fs.existsSync(webInfPath)) {
+      return true;
+    }
+    if (fs.existsSync(path.join(webInfPath, "web.xml"))) {
+      return true;
     }
 
-    /**
-     * Java EE Project Detection
-     * 
-     * Comprehensive project structure analysis implementing:
-     * 1. Standard directory layout verification
-     * 2. Web application descriptor detection
-     * 3. Build system configuration analysis
-     * 4. Existing artifact inspection
-     * 5. Framework signature detection
-     * 
-     * @returns Boolean indicating Java EE project validity
-     */
-    public static isJavaEEProject(): boolean {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders) { return false; }
-
-        const rootPath = workspaceFolders[0].uri.fsPath;
-        const webInfPath = path.join(rootPath, 'src', 'main', 'webapp', 'WEB-INF');
-        
-        if (fs.existsSync(webInfPath)) { return true; }
-        if (fs.existsSync(path.join(webInfPath, 'web.xml'))) { return true; }
-
-        const pomPath = path.join(rootPath, 'pom.xml');
-        if (fs.existsSync(pomPath) && fs.readFileSync(pomPath, 'utf-8').includes('<packaging>war</packaging>')) {
-            return true;
-        }
-
-        const gradlePath = path.join(rootPath, 'build.gradle');
-        if (fs.existsSync(gradlePath) && fs.readFileSync(gradlePath, 'utf-8').match(/(tomcat|jakarta|javax\.ee)/i)) {
-            return true;
-        }
-
-        const targetPath = path.join(rootPath, 'target');
-        if (fs.existsSync(targetPath) && fs.readdirSync(targetPath).some(file => file.endsWith('.war') || file.endsWith('.ear'))) {
-            return true;
-        }
-
-        return false;
+    const pomPath = path.join(rootPath, "pom.xml");
+    if (
+      fs.existsSync(pomPath) &&
+      fs.readFileSync(pomPath, "utf-8").includes("<packaging>war</packaging>")
+    ) {
+      return true;
     }
 
-    /**
-     * Project Structure Detection
-     * 
-     * Auto-detects project structure and configuration for smart deployment:
-     * 1. Maven project detection and configuration
-     * 2. Gradle project detection and configuration  
-     * 3. Eclipse project detection and configuration
-     * 4. Plain Java project fallback
-     * 
-     * @returns ProjectStructure with detected configuration
-     */
-    public detectProjectStructure(): ProjectStructure {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders) {
-            throw new Error('No workspace folder found');
-        }
-
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        
-        // Maven detection
-        if (fs.existsSync(path.join(workspaceRoot, 'pom.xml'))) {
-            const defaultWebappName = this.getMavenArtifactId(workspaceRoot) || path.basename(workspaceRoot);
-            return {
-                type: 'maven',
-                javaOutputDir: 'target/classes',
-                javaSourceRoots: ['src/main/java'],
-                webResourceRoots: ['src/main/webapp'],
-                defaultWebappName,
-                webappName: this.resolveWebappName(defaultWebappName)
-            };
-        }
-        
-        // Gradle detection
-        if (fs.existsSync(path.join(workspaceRoot, 'build.gradle')) || 
-            fs.existsSync(path.join(workspaceRoot, 'build.gradle.kts'))) {
-            const defaultWebappName = this.getGradleProjectName(workspaceRoot) || path.basename(workspaceRoot);
-            return {
-                type: 'gradle',
-                javaOutputDir: 'build/classes/java/main',
-                javaSourceRoots: ['src/main/java'],
-                webResourceRoots: ['src/main/webapp'],
-                defaultWebappName,
-                webappName: this.resolveWebappName(defaultWebappName)
-            };
-        }
-        
-        // Eclipse/Plain Java detection
-        if (fs.existsSync(path.join(workspaceRoot, '.classpath'))) {
-            const defaultWebappName = path.basename(workspaceRoot);
-            return {
-                type: 'eclipse',
-                javaOutputDir: 'bin',
-                javaSourceRoots: ['src'],
-                webResourceRoots: ['WebContent', 'web'],
-                defaultWebappName,
-                webappName: this.resolveWebappName(defaultWebappName)
-            };
-        }
-        
-        // Default fallback
-        const defaultWebappName = path.basename(workspaceRoot);
-        return {
-            type: 'plain',
-            javaOutputDir: 'bin',
-            javaSourceRoots: ['src'],
-            webResourceRoots: ['web', 'webapp'],
-            defaultWebappName,
-            webappName: this.resolveWebappName(defaultWebappName)
-        };
+    const gradlePath = path.join(rootPath, "build.gradle");
+    if (
+      fs.existsSync(gradlePath) &&
+      fs.readFileSync(gradlePath, "utf-8").match(/(tomcat|jakarta|javax\.ee)/i)
+    ) {
+      return true;
     }
 
-    /**
-     * Extract Maven artifact ID from pom.xml
-     */
-    private getMavenArtifactId(workspaceRoot: string): string | null {
-        try {
-            const pomPath = path.join(workspaceRoot, 'pom.xml');
-            const pomContent = fs.readFileSync(pomPath, 'utf-8');
-            // Strip blocks that contain nested <artifactId> to avoid false matches
-            const stripped = pomContent
-                .replace(/<parent>[\s\S]*?<\/parent>/g, '')
-                .replace(/<dependencies>[\s\S]*?<\/dependencies>/g, '')
-                .replace(/<plugins>[\s\S]*?<\/plugins>/g, '');
-            const artifactIdMatch = stripped.match(/<artifactId>(.*?)<\/artifactId>/);
-            return artifactIdMatch ? artifactIdMatch[1] : null;
-        } catch {
-            return null;
-        }
+    const targetPath = path.join(rootPath, "target");
+    if (
+      fs.existsSync(targetPath) &&
+      fs
+        .readdirSync(targetPath)
+        .some((file) => file.endsWith(".war") || file.endsWith(".ear"))
+    ) {
+      return true;
     }
 
-    /**
-     * Extract Gradle project name from settings.gradle
-     */
-    private getGradleProjectName(workspaceRoot: string): string | null {
-        try {
-            const settingsPath = path.join(workspaceRoot, 'settings.gradle');
-            if (fs.existsSync(settingsPath)) {
-                const settingsContent = fs.readFileSync(settingsPath, 'utf-8');
-                const nameMatch = settingsContent.match(/rootProject\.name\s*=\s*['"]([^'"]+)['"]/);
-                return nameMatch ? nameMatch[1] : null;
-            }
-            return null;
-        } catch {
-            return null;
-        }
+    return false;
+  }
+
+  /**
+   * Parse Eclipse WTP .settings/org.eclipse.wst.common.component to extract
+   * deployment mappings (web root, source roots, context name).
+   * Falls back to safe defaults when the file is missing or unparseable.
+   */
+  private parseEclipseWtpComponent(workspaceRoot: string): {
+    webappName: string;
+    webResourceRoots: string[];
+    javaSourceRoots: string[];
+    additionalMappings: LocalDeployMapping[];
+  } | null {
+    const wtpPath = path.join(
+      workspaceRoot,
+      ".settings",
+      "org.eclipse.wst.common.component",
+    );
+    if (!fs.existsSync(wtpPath)) {
+      return null;
     }
 
-    /**
-     * Build and Deployment Orchestrator
-     * 
-     * Centralized deployment control implementing:
-     * 1. Project validation
-     * 2. Build strategy selection
-     * 3. Target environment preparation
-     * 4. Build execution
-     * 5. Post-deployment actions
-     * 
-     * @param type Build strategy ('Local' | 'Maven' | 'Gradle' | 'Choice')
-     * @log Deployment progress and errors
-     */
-    public async deploy(type: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt' | 'Choice'): Promise<void> {
-        const projectDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!projectDir || !Builder.isJavaEEProject()) {
-            await this.createNewProject();
-            return;
+    try {
+      const xml = fs.readFileSync(wtpPath, "utf-8");
+      const result: {
+        webappName: string;
+        webResourceRoots: string[];
+        javaSourceRoots: string[];
+        additionalMappings: LocalDeployMapping[];
+      } = {
+        webappName: path.basename(workspaceRoot),
+        webResourceRoots: [],
+        javaSourceRoots: [],
+        additionalMappings: [],
+      };
+
+      // Extract deploy-name
+      const deployNameMatch = xml.match(
+        /<wb-module[^>]*deploy-name="([^"]+)"/i,
+      );
+      if (deployNameMatch?.[1]) {
+        result.webappName = deployNameMatch[1].trim();
+      }
+
+      // Extract wb-resource entries
+      const resourceRegex =
+        /<wb-resource\s+deploy-path="([^"]+)"\s+source-path="([^"]+)"/gi;
+      let match: RegExpExecArray | null;
+      while ((match = resourceRegex.exec(xml)) !== null) {
+        const deployPath = match[1].trim();
+        const sourcePath = match[2].trim().replace(/^\/+/, "");
+
+        if (deployPath === "/") {
+          result.webResourceRoots.push(sourcePath);
+        } else if (deployPath.startsWith("/WEB-INF/classes")) {
+          result.javaSourceRoots.push(sourcePath);
+        } else {
+          result.additionalMappings.push({
+            source: sourcePath,
+            destination: deployPath.replace(/^\/+/, ""),
+            description: `Eclipse WTP: ${sourcePath} → ${deployPath}`,
+            enabled: true,
+            needsReload: false,
+          });
         }
+      }
 
-        let buildType: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
-        try {
-            buildType = await this.resolveBuildType(type, projectDir);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (message !== Builder.DEPLOY_CANCELLED) {
-                getLogger().error('Deployment aborted:', false, message);
-            } else {
-                getLogger().info('Deployment cancelled by user');
-            }
-            return;
-        }
-
-        getLogger().info(`Using ${buildType} deployment pipeline`);
-
-        try {
-            this.projectStructure = this.detectProjectStructure();
-        } catch (error) {
-            getLogger().warn('Unable to refresh project structure before deployment');
-            if (error) {
-                smartLog.debug(`Project structure detection error: ${error}`);
-            }
-        }
-
-        const fallbackName = this.projectStructure?.defaultWebappName ?? path.basename(projectDir);
-        const appName = this.resolveWebappName(fallbackName);
-        if (this.projectStructure) {
-            this.projectStructure.webappName = appName;
-        }
-        const tomcatHome = await getTomcat().findTomcatHome();
-        
-        getTomcat().setAppName(appName);
-
-        if (!tomcatHome || !appName) { return; }
-
-        const webappsRoot = await getTomcat().getWebappsRoot(tomcatHome);
-        if (!webappsRoot) { return; }
-
-        const targetDir = path.join(webappsRoot, appName);
-        await vscode.workspace.saveAll();
-
-        try {            
-            const startTime = performance.now();
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: `${buildType} deployment in progress`,
-                cancellable: false
-            }, async (progress) => {
-                progress.report({ message: 'Preparing workspace...' });
-                switch (buildType) {
-                    case 'Local':
-                        await this.localDeploy(projectDir, targetDir, tomcatHome, progress);
-                        break;
-                    case 'Maven':
-                        progress.report({ message: 'Running Maven build...' });
-                        await this.mavenDeploy(projectDir, targetDir);
-                        break;
-                    case 'PreBuilt':
-                        progress.report({ message: 'Deploying pre-built classes + static resources...' });
-                        await this.mavenPreBuiltDeploy(projectDir, targetDir, tomcatHome, progress);
-                        break;
-                    case 'Gradle':
-                        progress.report({ message: 'Running Gradle build...' });
-                        await this.gradleDeploy(projectDir, targetDir, appName);
-                        break;
-                    default:
-                        throw new Error(`Invalid deployment type: ${buildType}`);
-                }
-            });
-
-            const endTime = performance.now();
-            const duration = Math.round(endTime - startTime);
-
-            if (fs.existsSync(targetDir)) {
-                getLogger().success(`${buildType} build completed in ${duration}ms`, true);
-                await new Promise(resolve => setTimeout(resolve, 100));
-                await getTomcat().reload();
-            }
-
-            this.attempts = 0;
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            const isBusyError = errorMessage.includes('EBUSY') || errorMessage.includes('resource busy or locked');
-            if (isBusyError && this.attempts < 3) {
-                this.attempts++;
-                await getTomcat().stop(false);
-                await this.deploy(buildType);
-            } else {
-                getLogger().error(`${buildType} build failed:`, true, errorMessage);
-            }
-            //getLogger().defaultStatusBar();
-        } finally {
-            //getLogger().defaultStatusBar();
-        }
-    }
-
-    private async resolveBuildType(
-        requested: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt' | 'Choice',
-        projectDir: string
-    ): Promise<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> {
-        if (requested !== 'Choice') {
-            return requested;
-        }
-
-        const candidates = this.collectBuildCandidates(projectDir);
-        const preferred = this.preferredBuildType;
-
-        if (preferred !== 'Auto' && candidates.includes(preferred)) {
-            return preferred;
-        }
-
-        const configuredFallback = vscode.workspace.getConfiguration('turbocat')
-            .get<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'>('autoDeployBuildType', 'Local');
-
-        if (preferred === 'Auto' &&
-            configuredFallback &&
-            configuredFallback !== 'Local' &&
-            candidates.includes(configuredFallback)) {
-            await this.persistPreferredBuildType(configuredFallback);
-            return configuredFallback;
-        }
-
-        if (candidates.length === 1) {
-            return candidates[0];
-        }
-
-        const choice = await vscode.window.showQuickPick(candidates, {
-            placeHolder: 'Select the build type TurboCat should use for this workspace',
-            ignoreFocusOut: true
+      // Extract dependent-module (library references)
+      const depRegex =
+        /<dependent-module\s+archive-name="([^"]+)"\s+handle="([^"]+)"/gi;
+      while ((match = depRegex.exec(xml)) !== null) {
+        result.additionalMappings.push({
+          source: match[2].trim(),
+          destination: `WEB-INF/lib/${match[1].trim()}`,
+          description: `Eclipse WTP library: ${match[1].trim()}`,
+          enabled: true,
+          needsReload: false,
         });
+      }
 
-        if (!choice) {
-            throw new Error(Builder.DEPLOY_CANCELLED);
-        }
+      return result;
+    } catch (error) {
+      smartLog.debug(`Failed to parse Eclipse WTP component: ${error}`);
+      return null;
+    }
+  }
 
-        const allowed: ReadonlyArray<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> = ['Local', 'Maven', 'Gradle', 'PreBuilt'];
-        if (!allowed.includes(choice as 'Local' | 'Maven' | 'Gradle' | 'PreBuilt')) {
-            throw new Error(`Unsupported build type selection: ${choice}`);
-        }
-
-        const typedChoice = choice as 'Local' | 'Maven' | 'Gradle' | 'PreBuilt';
-        await this.persistPreferredBuildType(typedChoice);
-        return typedChoice;
+  /**
+   * Project Structure Detection
+   *
+   * Auto-detects project structure and configuration for smart deployment:
+   * 1. Maven project detection and configuration
+   * 2. Gradle project detection and configuration
+   * 3. Eclipse project detection and configuration
+   * 4. Plain Java project fallback
+   *
+   * @returns ProjectStructure with detected configuration
+   */
+  public detectProjectStructure(): ProjectStructure {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      throw new Error("No workspace folder found");
     }
 
-    private collectBuildCandidates(projectDir: string): Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> {
-        const candidates: Array<'Local' | 'Maven' | 'Gradle' | 'PreBuilt'> = ['Local'];
-        const hasPom = fs.existsSync(path.join(projectDir, 'pom.xml'));
-        const hasGradle = fs.existsSync(path.join(projectDir, 'build.gradle')) ||
-            fs.existsSync(path.join(projectDir, 'build.gradle.kts'));
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
-        if (hasPom) {
-            candidates.push('Maven');
-            // PreBuilt: available when pom.xml + target/classes exist (compiled by Java LS)
-            const hasPreBuiltClasses = fs.existsSync(path.join(projectDir, 'target', 'classes'));
-            if (hasPreBuiltClasses) {
-                candidates.push('PreBuilt');
-            }
-        }
-
-        if (hasGradle) {
-            candidates.push('Gradle');
-        }
-
-        return candidates;
+    // Maven detection
+    if (fs.existsSync(path.join(workspaceRoot, "pom.xml"))) {
+      const defaultWebappName =
+        this.getMavenArtifactId(workspaceRoot) || path.basename(workspaceRoot);
+      return {
+        type: "maven",
+        javaOutputDir: "target/classes",
+        javaSourceRoots: ["src/main/java"],
+        webResourceRoots: ["src/main/webapp"],
+        defaultWebappName,
+        webappName: this.resolveWebappName(defaultWebappName),
+      };
     }
 
-    private async persistPreferredBuildType(value: 'Local' | 'Maven' | 'Gradle' | 'PreBuilt'): Promise<void> {
-        this.preferredBuildType = value;
-        await vscode.workspace.getConfiguration().update(
-            'turbocat.preferredBuildType',
-            value,
-            vscode.ConfigurationTarget.Workspace
+    // Gradle detection
+    if (
+      fs.existsSync(path.join(workspaceRoot, "build.gradle")) ||
+      fs.existsSync(path.join(workspaceRoot, "build.gradle.kts"))
+    ) {
+      const defaultWebappName =
+        this.getGradleProjectName(workspaceRoot) ||
+        path.basename(workspaceRoot);
+      return {
+        type: "gradle",
+        javaOutputDir: "build/classes/java/main",
+        javaSourceRoots: ["src/main/java"],
+        webResourceRoots: ["src/main/webapp"],
+        defaultWebappName,
+        webappName: this.resolveWebappName(defaultWebappName),
+      };
+    }
+
+    // Eclipse/Plain Java detection
+    if (fs.existsSync(path.join(workspaceRoot, ".classpath"))) {
+      const wtp = this.parseEclipseWtpComponent(workspaceRoot);
+      const defaultWebappName = wtp?.webappName || path.basename(workspaceRoot);
+      const webResourceRoots = wtp?.webResourceRoots.length
+        ? wtp.webResourceRoots
+        : ["WebContent", "web"];
+      const javaSourceRoots = wtp?.javaSourceRoots.length
+        ? wtp.javaSourceRoots
+        : ["src"];
+
+      // Merge WTP additional mappings into smart deploy config
+      if (wtp?.additionalMappings.length) {
+        if (!this.smartDeployConfig) {
+          this.smartDeployConfig = {
+            projectType: "eclipse",
+            webappName: this.resolveWebappName(defaultWebappName),
+            mappings: DEFAULT_MAPPINGS.eclipse,
+            settings: {
+              debounceTime: vscode.workspace
+                .getConfiguration("turbocat")
+                .get<number>("smartDeployDebounce", 300),
+              enabled: true,
+              logLevel: "info",
+            },
+          };
+        }
+        if (!this.smartDeployConfig.localDeploy) {
+          this.smartDeployConfig.localDeploy = { mappings: [] };
+        }
+        const existing = new Set(
+          this.smartDeployConfig.localDeploy.mappings.map(
+            (m) => `${m.source}|${m.destination}`,
+          ),
         );
+        for (const m of wtp.additionalMappings) {
+          if (!existing.has(`${m.source}|${m.destination}`)) {
+            this.smartDeployConfig.localDeploy.mappings.push(m);
+          }
+        }
+      }
+
+      return {
+        type: "eclipse",
+        javaOutputDir: "bin",
+        javaSourceRoots,
+        webResourceRoots,
+        defaultWebappName,
+        webappName: this.resolveWebappName(defaultWebappName),
+      };
     }
 
-    /**
-     * Automated Deployment Trigger
-     * 
-     * Implements intelligent deployment automation with:
-     * 1. Save event analysis
-     * 2. Build type resolution
-     * 3. Smart deploy initialization
-     * 4. Concurrency control
-     * 5. Error handling
-     * 
-     * @deprecated Parameter reason is unused but kept for backward compatibility
-     */
-    public async autoDeploy(_reason: vscode.TextDocumentSaveReason): Promise<void> {
-        if (this.isDeploying || !Builder.isJavaEEProject()) { return; }
-    
-        try {
-            this.isDeploying = true;
-            
-            if (this.autoDeployMode === 'Smart') {
-                // Smart deploy is handled by file system watchers
-                // This ensures smart deploy is initialized if not already
-                if (!this.projectStructure) {
-                    this.initializeSmartDeploy().catch(error =>
-                        smartLog.error('Failed to initialize smart deploy', error as string)
-                    );
-                }
-            }
-            // No other deployment modes are supported anymore
-        } finally {
-            this.isDeploying = false;
-        }
+    // Default fallback
+    const defaultWebappName = path.basename(workspaceRoot);
+    return {
+      type: "plain",
+      javaOutputDir: "bin",
+      javaSourceRoots: ["src"],
+      webResourceRoots: ["web", "webapp"],
+      defaultWebappName,
+      webappName: this.resolveWebappName(defaultWebappName),
+    };
+  }
+
+  /**
+   * Extract Maven artifact ID from pom.xml
+   */
+  private getMavenArtifactId(workspaceRoot: string): string | null {
+    try {
+      const pomPath = path.join(workspaceRoot, "pom.xml");
+      const pomContent = fs.readFileSync(pomPath, "utf-8");
+      // Strip blocks that contain nested <artifactId> to avoid false matches
+      const stripped = pomContent
+        .replace(/<parent>[\s\S]*?<\/parent>/g, "")
+        .replace(/<dependencies>[\s\S]*?<\/dependencies>/g, "")
+        .replace(/<plugins>[\s\S]*?<\/plugins>/g, "");
+      const artifactIdMatch = stripped.match(/<artifactId>(.*?)<\/artifactId>/);
+      return artifactIdMatch ? artifactIdMatch[1] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Extract Gradle project name from settings.gradle
+   */
+  private getGradleProjectName(workspaceRoot: string): string | null {
+    try {
+      const settingsPath = path.join(workspaceRoot, "settings.gradle");
+      if (fs.existsSync(settingsPath)) {
+        const settingsContent = fs.readFileSync(settingsPath, "utf-8");
+        const nameMatch = settingsContent.match(
+          /rootProject\.name\s*=\s*['"]([^'"]+)['"]/,
+        );
+        return nameMatch ? nameMatch[1] : null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Build and Deployment Orchestrator
+   *
+   * Centralized deployment control implementing:
+   * 1. Project validation
+   * 2. Build strategy selection
+   * 3. Target environment preparation
+   * 4. Build execution
+   * 5. Post-deployment actions
+   *
+   * @param type Build strategy ('Local' | 'Maven' | 'Gradle' | 'Choice')
+   * @log Deployment progress and errors
+   */
+  public async deploy(
+    type: "Local" | "Maven" | "Gradle" | "PreBuilt" | "Choice",
+  ): Promise<void> {
+    const projectDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!projectDir || !Builder.isJavaEEProject()) {
+      await this.createNewProject();
+      return;
     }
 
-    /**
-     * Initialize Dual-Watcher Smart Deploy System
-     * 
-     * Implements dual-watcher architecture for optimal deployment performance:
-     * 1. Static Resource Watcher: monitors src folder for immediate deployment
-     * 2. Compiled File Watcher: monitors target/build folders for delayed batch deployment
-     */
-    public async initializeSmartDeploy(): Promise<void> {
-        // Update autoDeployMode from config to ensure it's current
-        this.autoDeployMode = vscode.workspace.getConfiguration().get('turbocat.smartDeploy', 'Disable') as 'Disable' | 'Smart';
-        
-        if (this.autoDeployMode !== 'Smart') {
-            smartLog.debug('Smart deploy not initialized - mode is not Smart');
-            return;
-        }
-
-        try {
-            smartLog.debug('Initializing hybrid smart deploy system...');
-            
-            // Check current workspace
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders || workspaceFolders.length === 0) {
-                smartLog.error('Smart deploy requires an open workspace');
-                return;
-            }
-            
-            // Detect project structure
-            this.projectStructure = this.detectProjectStructure();
-            smartLog.debug(`Detected project structure: ${JSON.stringify(this.projectStructure)}`);
-            
-            // Load or create smart deploy configuration
-            this.smartDeployConfig = await this.loadSmartDeployConfig();
-            
-            // Compile mappings for runtime efficiency
-            this.compiledMappings = this.compileMappings(this.smartDeployConfig);
-            
-            // Setup dual-watcher architecture
-            this.setupDualFileWatchers();
-            
-            const projectType = this.projectStructure.type;
-            const javaOut = this.projectStructure.javaOutputDir;
-            const infoSummary = `Smart deploy ready • ${projectType} project • webapp: ${this.projectStructure.webappName} • mappings: ${this.compiledMappings.length}`;
-            smartLog.success(infoSummary);
-            smartLog.debug(`Smart deploy config file: ${Builder.CONFIG_FILE}`);
-            smartLog.debug(`Java output directory: ${javaOut}`);
-        } catch (error) {
-            smartLog.error('Failed to initialize smart deploy', error as string);
-        }
+    let buildType: "Local" | "Maven" | "Gradle" | "PreBuilt";
+    try {
+      buildType = await this.resolveBuildType(type, projectDir);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== Builder.DEPLOY_CANCELLED) {
+        getLogger().error("Deployment aborted:", false, message);
+      } else {
+        getLogger().info("Deployment cancelled by user");
+      }
+      return;
     }
 
-    /**
-     * Setup dual-watcher architecture for optimized smart deployment
-     * 
-     * Architecture:
-     * 1. Static Resource Watcher: monitors src folder (excluding java files)
-     *    - Immediate deployment (0ms delay)
-     *    - Handles HTML, CSS, JS, JSP, config files, etc.
-     * 
-     * 2. Compiled File Watcher: monitors target/classes and build/classes
-     *    - Delayed deployment (configurable, default 300ms)
-     *    - Handles compiled Java classes
-     */
-    private setupDualFileWatchers(): void {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            smartLog.debug('Dual watcher setup failed: No workspace root');
-            return;
-        }
+    getLogger().info(`Using ${buildType} deployment pipeline`);
 
-        // Dispose existing watchers
-        this.disposeFileWatchers();
-
-        smartLog.info('Setting up dual-watcher smart deploy watchers');
-        smartLog.debug('Features: static resources (immediate) + compiled classes (delayed)');
-        
-        // 1. Static Resource Watcher - src/**/* excluding .java files
-        this.setupStaticResourceWatcher(workspaceRoot);
-        
-        // 2. Compiled File Watcher - target/classes/**/*.class or build/classes/**/*.class
-        this.setupCompiledFileWatcher(workspaceRoot);
-        
-        smartLog.success('Dual-watcher smart deploy setup complete');
+    // Pause smart deploy during manual deployment to avoid watcher conflicts.
+    // The try/finally below ensures smart deploy is ALWAYS restored regardless
+    // of early returns, errors, or retries.
+    const previousSmartDeploy = this.autoDeployMode;
+    if (this.autoDeployMode === "Smart") {
+      this.autoDeployMode = "Disable";
+      this.disposeFileWatchers();
+      smartLog.info(
+        "Smart deploy paused for manual deployment — will resume after completion",
+      );
     }
 
-    /**
-     * Setup static resource file watcher for immediate deployment
-     */
-    private setupStaticResourceWatcher(workspaceRoot: string): void {
-        const structure = this.projectStructure;
-        const candidateRoots = new Set<string>();
-
-        if (structure?.webResourceRoots?.length) {
-            structure.webResourceRoots.forEach(root => candidateRoots.add(root));
+    try {
+      try {
+        this.projectStructure = this.detectProjectStructure();
+      } catch (error) {
+        getLogger().warn("Unable to refresh project structure before deployment");
+        if (error) {
+          smartLog.debug(`Project structure detection error: ${error}`);
         }
+      }
 
-        candidateRoots.add(path.join('src', 'main', 'webapp'));
-        candidateRoots.add(path.join('src', 'main', 'resources'));
-        candidateRoots.add('src');
+      const fallbackName =
+        this.projectStructure?.defaultWebappName ?? path.basename(projectDir);
+      const appName = this.resolveWebappName(fallbackName);
+      if (this.projectStructure) {
+        this.projectStructure.webappName = appName;
+      }
+      const tomcatHome = await getTomcat().findTomcatHome();
 
-        const localMappingCandidates = this.smartDeployConfig?.localDeploy?.mappings ?? [];
-        localMappingCandidates
-            .filter(mapping => mapping && mapping.enabled !== false)
-            .forEach(mapping => {
-                const normalizedSource = this.normalizeLocalMappingSource(mapping.source);
-                const root = this.getMappingRoot(normalizedSource);
-                if (root) {
-                    candidateRoots.add(root);
-                }
-            });
+      getTomcat().setAppName(appName);
 
-        let watcherCreated = false;
+      if (!tomcatHome || !appName) {
+        return;
+      }
 
-        candidateRoots.forEach(root => {
-            if (!root || root.includes('*')) {
-                return;
-            }
+      const webappsRoot = await getTomcat().getWebappsRoot(tomcatHome);
+      if (!webappsRoot) {
+        return;
+      }
 
-            const normalized = root.replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
-            const absolute = path.join(workspaceRoot, normalized);
+      const targetDir = path.join(webappsRoot, appName);
+      await vscode.workspace.saveAll();
 
-            if (!fs.existsSync(absolute)) {
-                smartLog.debug(`Skipping static watcher for ${normalized} (directory not found)`);
-                return;
-            }
+      const startTime = performance.now();
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `${buildType} deployment in progress`,
+          cancellable: false,
+        },
+        async (progress) => {
+          progress.report({ message: "Preparing workspace..." });
+          switch (buildType) {
+            case "Local":
+              await this.localDeploy(
+                projectDir,
+                targetDir,
+                tomcatHome,
+                progress,
+              );
+              break;
+            case "Maven":
+              progress.report({ message: "Running Maven build..." });
+              await this.mavenDeploy(projectDir, targetDir);
+              break;
+            case "PreBuilt":
+              progress.report({
+                message: "Deploying pre-built classes + static resources...",
+              });
+              await this.mavenPreBuiltDeploy(
+                projectDir,
+                targetDir,
+                tomcatHome,
+                progress,
+              );
+              break;
+            case "Gradle":
+              progress.report({ message: "Running Gradle build..." });
+              await this.gradleDeploy(projectDir, targetDir, appName);
+              break;
+            default:
+              throw new Error(`Invalid deployment type: ${buildType}`);
+          }
+        },
+      );
 
-            const globPattern = `${normalized.replace(/\\/g, '/')}/**/*`;
-            const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+      const endTime = performance.now();
+      const duration = Math.round(endTime - startTime);
 
-            smartLog.debug(`Static resource watcher: ${absolute}`);
-            smartLog.debug('Strategy: immediate deployment for web resources');
+      if (fs.existsSync(targetDir)) {
+        getLogger().success(
+          `${buildType} build completed in ${duration}ms`,
+          true,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await getTomcat().reload();
+      }
 
-            watcher.onDidChange((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'change'));
-            watcher.onDidCreate((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'create'));
-            watcher.onDidDelete?.((uri: vscode.Uri) => this.handleStaticResourceChange(uri, 'delete'));
+      this.attempts = 0;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const isBusyError =
+        errorMessage.includes("EBUSY") ||
+        errorMessage.includes("resource busy or locked");
+      if (isBusyError && this.attempts < 3) {
+        this.attempts++;
+        await getTomcat().stop(false);
+        // Recursive retry: the inner deploy() call will see autoDeployMode
+        // already Disabled and skip its own pause; when it returns, this
+        // outer finally will correctly restore the original Smart state.
+        await this.deploy(buildType);
+      } else {
+        getLogger().error(`${buildType} build failed:`, true, errorMessage);
+      }
+    } finally {
+      // ALWAYS restore smart deploy state regardless of how we exited
+      if (
+        previousSmartDeploy === "Smart" &&
+        this.autoDeployMode === "Disable"
+      ) {
+        this.autoDeployMode = "Smart";
+        // Re-initialize watchers in the background — don't block deployment completion
+        this.initializeSmartDeploy().catch((err) =>
+          smartLog.error(
+            "Failed to resume smart deploy after manual deployment",
+            err as string,
+          ),
+        );
+        smartLog.info("Smart deploy resumed after manual deployment");
+      }
+    }
+  }
 
-            this.fileWatchers.push(watcher);
-            watcherCreated = true;
-        });
-
-        if (!watcherCreated) {
-            smartLog.warn('No static resource watcher configured. Verify resource directories exist.');
-        } else {
-            smartLog.info('Static resource watcher ready');
-        }
+  private async resolveBuildType(
+    requested: "Local" | "Maven" | "Gradle" | "PreBuilt" | "Choice",
+    projectDir: string,
+  ): Promise<"Local" | "Maven" | "Gradle" | "PreBuilt"> {
+    if (requested !== "Choice") {
+      return requested;
     }
 
-    /**
-     * Setup compiled file watcher for delayed deployment
-     */
-    private setupCompiledFileWatcher(workspaceRoot: string): void {
+    const candidates = this.collectBuildCandidates(projectDir);
+    const preferred = this.preferredBuildType;
+
+    if (preferred !== "Auto" && candidates.includes(preferred)) {
+      return preferred;
+    }
+
+    const configuredFallback = vscode.workspace
+      .getConfiguration("turbocat")
+      .get<"Local" | "Maven" | "Gradle" | "PreBuilt">(
+        "autoDeployBuildType",
+        "Local",
+      );
+
+    if (
+      preferred === "Auto" &&
+      configuredFallback &&
+      configuredFallback !== "Local" &&
+      candidates.includes(configuredFallback)
+    ) {
+      await this.persistPreferredBuildType(configuredFallback);
+      return configuredFallback;
+    }
+
+    if (candidates.length === 1) {
+      return candidates[0];
+    }
+
+    const choice = await vscode.window.showQuickPick(candidates, {
+      placeHolder:
+        "Select the build type TurboCat should use for this workspace",
+      ignoreFocusOut: true,
+    });
+
+    if (!choice) {
+      throw new Error(Builder.DEPLOY_CANCELLED);
+    }
+
+    const allowed: ReadonlyArray<"Local" | "Maven" | "Gradle" | "PreBuilt"> = [
+      "Local",
+      "Maven",
+      "Gradle",
+      "PreBuilt",
+    ];
+    if (
+      !allowed.includes(choice as "Local" | "Maven" | "Gradle" | "PreBuilt")
+    ) {
+      throw new Error(`Unsupported build type selection: ${choice}`);
+    }
+
+    const typedChoice = choice as "Local" | "Maven" | "Gradle" | "PreBuilt";
+    await this.persistPreferredBuildType(typedChoice);
+    return typedChoice;
+  }
+
+  private collectBuildCandidates(
+    projectDir: string,
+  ): Array<"Local" | "Maven" | "Gradle" | "PreBuilt"> {
+    const candidates: Array<"Local" | "Maven" | "Gradle" | "PreBuilt"> = [
+      "Local",
+    ];
+    const hasPom = fs.existsSync(path.join(projectDir, "pom.xml"));
+    const hasGradle =
+      fs.existsSync(path.join(projectDir, "build.gradle")) ||
+      fs.existsSync(path.join(projectDir, "build.gradle.kts"));
+
+    if (hasPom) {
+      candidates.push("Maven");
+      // PreBuilt: available when pom.xml + target/classes exist (compiled by Java LS)
+      const hasPreBuiltClasses = fs.existsSync(
+        path.join(projectDir, "target", "classes"),
+      );
+      if (hasPreBuiltClasses) {
+        candidates.push("PreBuilt");
+      }
+    }
+
+    if (hasGradle) {
+      candidates.push("Gradle");
+    }
+
+    return candidates;
+  }
+
+  private async persistPreferredBuildType(
+    value: "Local" | "Maven" | "Gradle" | "PreBuilt",
+  ): Promise<void> {
+    this.preferredBuildType = value;
+    await vscode.workspace
+      .getConfiguration()
+      .update(
+        "turbocat.preferredBuildType",
+        value,
+        vscode.ConfigurationTarget.Workspace,
+      );
+  }
+
+  /**
+   * Automated Deployment Trigger
+   *
+   * Implements intelligent deployment automation with:
+   * 1. Save event analysis
+   * 2. Build type resolution
+   * 3. Smart deploy initialization
+   * 4. Concurrency control
+   * 5. Error handling
+   *
+   * @deprecated Parameter reason is unused but kept for backward compatibility
+   */
+  public async autoDeploy(
+    _reason: vscode.TextDocumentSaveReason,
+  ): Promise<void> {
+    if (this.isDeploying || !Builder.isJavaEEProject()) {
+      return;
+    }
+
+    try {
+      this.isDeploying = true;
+
+      if (this.autoDeployMode === "Smart") {
+        // Smart deploy is handled by file system watchers
+        // This ensures smart deploy is initialized if not already
         if (!this.projectStructure) {
-            return;
+          this.initializeSmartDeploy().catch((error) =>
+            smartLog.error(
+              "Failed to initialize smart deploy",
+              error as string,
+            ),
+          );
         }
+      }
+      // No other deployment modes are supported anymore
+    } finally {
+      this.isDeploying = false;
+    }
+  }
 
-        const outputCandidates = new Set<string>();
+  /**
+   * Initialize Dual-Watcher Smart Deploy System
+   *
+   * Implements dual-watcher architecture for optimal deployment performance:
+   * 1. Static Resource Watcher: monitors src folder for immediate deployment
+   * 2. Compiled File Watcher: monitors target/build folders for delayed batch deployment
+   */
+  public async initializeSmartDeploy(): Promise<void> {
+    // Update autoDeployMode from config to ensure it's current
+    this.autoDeployMode = vscode.workspace
+      .getConfiguration()
+      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
 
-        const mappingOutputs = this.resolveCompiledOutputDirectories();
-        mappingOutputs.forEach(absPath => {
-            const relative = path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
-            if (relative && !relative.startsWith('..')) {
-                outputCandidates.add(relative);
-            }
-        });
-
-        if (!outputCandidates.size && this.projectStructure.javaOutputDir) {
-            outputCandidates.add(this.projectStructure.javaOutputDir);
-        }
-
-        if (!outputCandidates.size) {
-            outputCandidates.add('bin');
-        }
-
-        let watcherCreated = false;
-
-        outputCandidates.forEach(root => {
-            if (!root || root.includes('*')) {
-                return;
-            }
-
-            const normalized = root.replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
-            const absolute = path.join(workspaceRoot, normalized);
-
-            if (!fs.existsSync(absolute)) {
-                smartLog.debug(`Skipping compiled watcher for ${normalized} (directory not found)`);
-                return;
-            }
-
-            const globPattern = `${normalized.replace(/\\/g, '/')}/**/*.class`;
-            const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-
-            smartLog.debug(`Compiled file watcher: ${absolute}`);
-            smartLog.debug('Strategy: delayed deployment for compiled classes');
-
-            watcher.onDidChange((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'change'));
-            watcher.onDidCreate((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'create'));
-            watcher.onDidDelete?.((uri: vscode.Uri) => this.handleCompiledFileChange(uri, 'delete'));
-
-            this.fileWatchers.push(watcher);
-            watcherCreated = true;
-        });
-
-        if (!watcherCreated) {
-            smartLog.warn('No compiled file watcher configured. Verify build output directories exist.');
-        } else {
-            smartLog.info('Compiled file watcher ready');
-        }
+    if (this.autoDeployMode !== "Smart") {
+      smartLog.debug("Smart deploy not initialized - mode is not Smart");
+      return;
     }
 
-    /**
-     * Dispose the unified file watcher
-     */
-    private disposeFileWatchers(): void {
-        this.fileWatchers.forEach(watcher => watcher.dispose());
-        this.fileWatchers = [];
+    try {
+      smartLog.debug("Initializing hybrid smart deploy system...");
+
+      // Check current workspace
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders || workspaceFolders.length === 0) {
+        smartLog.error("Smart deploy requires an open workspace");
+        return;
+      }
+
+      // Detect project structure
+      this.projectStructure = this.detectProjectStructure();
+      smartLog.debug(
+        `Detected project structure: ${JSON.stringify(this.projectStructure)}`,
+      );
+
+      // Load or create smart deploy configuration
+      this.smartDeployConfig = await this.loadSmartDeployConfig();
+
+      // Compile mappings for runtime efficiency
+      this.compiledMappings = this.compileMappings(this.smartDeployConfig);
+
+      // Setup dual-watcher architecture
+      this.setupDualFileWatchers();
+
+      const projectType = this.projectStructure.type;
+      const javaOut = this.projectStructure.javaOutputDir;
+      const infoSummary = `Smart deploy ready • ${projectType} project • webapp: ${this.projectStructure.webappName} • mappings: ${this.compiledMappings.length}`;
+      smartLog.success(infoSummary);
+      smartLog.debug(`Smart deploy config file: ${Builder.CONFIG_FILE}`);
+      smartLog.debug(`Java output directory: ${javaOut}`);
+
+      const showLog = vscode.workspace
+        .getConfiguration("turbocat")
+        .get<boolean>("turbocat.showSmartDeployLog", true);
+      if (!showLog) {
+        smartLog.warn(
+          "Smart deploy log visibility is OFF (turbocat.showSmartDeployLog=false). Deployment confirmations will still appear, but debug details are hidden.",
+        );
+      }
+    } catch (error) {
+      smartLog.error("Failed to initialize smart deploy", error as string);
+    }
+  }
+
+  /**
+   * Setup dual-watcher architecture for optimized smart deployment
+   *
+   * Architecture:
+   * 1. Static Resource Watcher: monitors src folder (excluding java files)
+   *    - Immediate deployment (0ms delay)
+   *    - Handles HTML, CSS, JS, JSP, config files, etc.
+   *
+   * 2. Compiled File Watcher: monitors target/classes and build/classes
+   *    - Delayed deployment (configurable, default 300ms)
+   *    - Handles compiled Java classes
+   */
+  private setupDualFileWatchers(): void {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      smartLog.debug("Dual watcher setup failed: No workspace root");
+      return;
     }
 
-    // LEGACY: Old unified file change handler (commented out)
-    // private handleSourceFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
-    //     ... (old implementation commented out)
-    // }
+    // Dispose existing watchers
+    this.disposeFileWatchers();
 
-    /**
-     * NEW: Handle static resource file changes (immediate deployment)
-     * Processes non-Java files from src directory with zero delay
-     */
-    private handleStaticResourceChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
-        const fileName = path.basename(uri.fsPath);
-        const fileExt = path.extname(uri.fsPath).toLowerCase();
-        
-        if (this.shouldBypassFile(uri.fsPath)) {
-            smartLog.debug(`Bypassing sync for file: ${fileName}`);
-            return;
-        }
-        
-        // Skip hidden files, temp files, and handle Java files specially
-        if (fileName.startsWith('.') || fileName.endsWith('.tmp') || fileName.endsWith('.temp') || fileExt === '.svn') {
-            smartLog.debug(`Skipping file: ${fileName} (temp/hidden file)`);
-            return;
-        }
+    smartLog.info("Setting up dual-watcher smart deploy watchers");
+    smartLog.debug(
+      "Features: static resources (immediate) + compiled classes (delayed)",
+    );
 
-        // Handle Java files - trigger compilation check
-        if (fileExt === '.java') {
-            smartLog.debug(`Java file ${eventType}: ${fileName} - triggering compilation check`);
-            this.handleJavaFileChange(uri.fsPath, eventType);
-            return;
-        }
-        
-        // Get relative path from workspace root
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return;
-        }
-        
-        const relativePath = path.relative(workspaceRoot, uri.fsPath);
-        smartLog.debug(`Static resource ${eventType}: ${fileName} (${relativePath})`);
-        
-        // Immediate deployment for static resources (no debouncing)
-        this.deployStaticResourceImmediately(uri.fsPath, eventType);
+    // 1. Static Resource Watcher - src/**/* excluding .java files
+    this.setupStaticResourceWatcher(workspaceRoot);
+
+    // 2. Compiled File Watcher - target/classes/**/*.class or build/classes/**/*.class
+    this.setupCompiledFileWatcher(workspaceRoot);
+
+    smartLog.success("Dual-watcher smart deploy setup complete");
+  }
+
+  /**
+   * Setup static resource file watcher for immediate deployment
+   */
+  private setupStaticResourceWatcher(workspaceRoot: string): void {
+    const structure = this.projectStructure;
+    const candidateRoots = new Set<string>();
+
+    if (structure?.webResourceRoots?.length) {
+      structure.webResourceRoots.forEach((root) => candidateRoots.add(root));
     }
 
-    /**
-     * Handle Java source file changes by checking for corresponding compiled files
-     */
-    private async handleJavaFileChange(javaFilePath: string, _eventType: 'change' | 'create' | 'delete'): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return;
+    candidateRoots.add(path.join("src", "main", "webapp"));
+    candidateRoots.add(path.join("src", "main", "resources"));
+    candidateRoots.add("src");
+
+    const localMappingCandidates =
+      this.smartDeployConfig?.localDeploy?.mappings ?? [];
+    localMappingCandidates
+      .filter((mapping) => mapping && mapping.enabled !== false)
+      .forEach((mapping) => {
+        const normalizedSource = this.normalizeLocalMappingSource(
+          mapping.source,
+        );
+        const root = this.getMappingRoot(normalizedSource);
+        if (root) {
+          candidateRoots.add(root);
         }
+      });
 
-        const fileName = path.basename(javaFilePath, '.java');
-        const relativePath = path.relative(workspaceRoot, javaFilePath);
-        smartLog.debug(`Java source ${fileName}.java changed (${relativePath})`);
+    let watcherCreated = false;
 
-        // Single delayed check - wait for compilation to complete
-        const debounceMs = vscode.workspace.getConfiguration('turbocat')
-            .get<number>('smartDeployDebounce', 300);
-        setTimeout(async () => {
-            try {
-                await this.checkAndDeployCompiledClass(javaFilePath, fileName);
-            } catch (error) {
-                smartLog.debug(`Compilation check failed for ${fileName}.java: ${error}`);
-            }
-        }, Math.max(debounceMs, 500));
+    candidateRoots.forEach((root) => {
+      if (!root || root.includes("*")) {
+        return;
+      }
+
+      const normalized = root.replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
+      const absolute = path.join(workspaceRoot, normalized);
+
+      if (!fs.existsSync(absolute)) {
+        smartLog.debug(
+          `Skipping static watcher for ${normalized} (directory not found)`,
+        );
+        return;
+      }
+
+      const globPattern = `${normalized.replace(/\\/g, "/")}/**/*`;
+      const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
+      const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+      smartLog.debug(`Static resource watcher: ${absolute}`);
+      smartLog.debug("Strategy: immediate deployment for web resources");
+
+      watcher.onDidChange((uri: vscode.Uri) =>
+        this.handleStaticResourceChange(uri, "change"),
+      );
+      watcher.onDidCreate((uri: vscode.Uri) =>
+        this.handleStaticResourceChange(uri, "create"),
+      );
+      watcher.onDidDelete?.((uri: vscode.Uri) =>
+        this.handleStaticResourceChange(uri, "delete"),
+      );
+
+      this.fileWatchers.push(watcher);
+      watcherCreated = true;
+    });
+
+    if (!watcherCreated) {
+      smartLog.warn(
+        "No static resource watcher configured. Verify resource directories exist.",
+      );
+    } else {
+      smartLog.info("Static resource watcher ready");
+    }
+  }
+
+  /**
+   * Setup compiled file watcher for delayed deployment
+   */
+  private setupCompiledFileWatcher(workspaceRoot: string): void {
+    if (!this.projectStructure) {
+      return;
     }
 
+    const outputCandidates = new Set<string>();
 
+    const mappingOutputs = this.resolveCompiledOutputDirectories();
+    mappingOutputs.forEach((absPath) => {
+      const relative = path
+        .relative(workspaceRoot, absPath)
+        .replace(/\\/g, "/");
+      if (relative && !relative.startsWith("..")) {
+        outputCandidates.add(relative);
+      }
+    });
 
-    /**
-     * Check for compiled .class files and deploy them
-     * Enhanced version that detects ALL related class files including inner classes
-     */
-    private async checkAndDeployCompiledClass(javaFilePath: string, className: string): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) {
-            return;
-        }
+    if (!outputCandidates.size && this.projectStructure.javaOutputDir) {
+      outputCandidates.add(this.projectStructure.javaOutputDir);
+    }
 
-        const outputDirs = this.resolveCompiledOutputDirectories();
-        const existingOutputDirs = outputDirs.filter(dir => fs.existsSync(dir));
+    if (!outputCandidates.size) {
+      outputCandidates.add("bin");
+    }
 
-        if (!existingOutputDirs.length) {
-            smartLog.debug(`No compiled output directories found. Checked: ${outputDirs.join(', ') || 'none'}`);
-            return;
-        }
+    let watcherCreated = false;
 
-        // Derive the Java package from the source file path relative to the source root
-        let javaPackage = '';
-        const sourceRoots = this.projectStructure.javaSourceRoots || [];
-        for (const sourceRoot of sourceRoots) {
-            const absSourceRoot = path.join(workspaceRoot, sourceRoot);
-            if (javaFilePath.startsWith(absSourceRoot + path.sep)) {
-                const relativeToSource = path.relative(absSourceRoot, javaFilePath);
-                javaPackage = path.dirname(relativeToSource).replace(/\\/g, '/');
-                break;
-            }
-        }
+    outputCandidates.forEach((root) => {
+      if (!root || root.includes("*")) {
+        return;
+      }
 
+      const normalized = root.replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
+      const absolute = path.join(workspaceRoot, normalized);
+
+      if (!fs.existsSync(absolute)) {
+        smartLog.debug(
+          `Skipping compiled watcher for ${normalized} (directory not found)`,
+        );
+        return;
+      }
+
+      const globPattern = `${normalized.replace(/\\/g, "/")}/**/*.class`;
+      const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
+      const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+      smartLog.debug(`Compiled file watcher: ${absolute}`);
+      smartLog.debug("Strategy: delayed deployment for compiled classes");
+
+      watcher.onDidChange((uri: vscode.Uri) =>
+        this.handleCompiledFileChange(uri, "change"),
+      );
+      watcher.onDidCreate((uri: vscode.Uri) =>
+        this.handleCompiledFileChange(uri, "create"),
+      );
+      watcher.onDidDelete?.((uri: vscode.Uri) =>
+        this.handleCompiledFileChange(uri, "delete"),
+      );
+
+      this.fileWatchers.push(watcher);
+      watcherCreated = true;
+    });
+
+    if (!watcherCreated) {
+      smartLog.warn(
+        "No compiled file watcher configured. Verify build output directories exist.",
+      );
+    } else {
+      smartLog.info("Compiled file watcher ready");
+    }
+  }
+
+  /**
+   * Dispose the unified file watcher
+   */
+  private disposeFileWatchers(): void {
+    this.fileWatchers.forEach((watcher) => watcher.dispose());
+    this.fileWatchers = [];
+  }
+
+  // LEGACY: Old unified file change handler (commented out)
+  // private handleSourceFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
+  //     ... (old implementation commented out)
+  // }
+
+  /**
+   * NEW: Handle static resource file changes (immediate deployment)
+   * Processes non-Java files from src directory with zero delay
+   */
+  private handleStaticResourceChange(
+    uri: vscode.Uri,
+    eventType: "change" | "create" | "delete",
+  ): void {
+    const fileName = path.basename(uri.fsPath);
+    const fileExt = path.extname(uri.fsPath).toLowerCase();
+
+    if (this.shouldBypassFile(uri.fsPath)) {
+      smartLog.debug(`Bypassing sync for file: ${fileName}`);
+      return;
+    }
+
+    // Skip hidden files, temp files, and handle Java files specially
+    if (
+      fileName.startsWith(".") ||
+      fileName.endsWith(".tmp") ||
+      fileName.endsWith(".temp") ||
+      fileExt === ".svn"
+    ) {
+      smartLog.debug(`Skipping file: ${fileName} (temp/hidden file)`);
+      return;
+    }
+
+    // Handle Java files - trigger compilation check
+    if (fileExt === ".java") {
+      smartLog.debug(
+        `Java file ${eventType}: ${fileName} - triggering compilation check`,
+      );
+      this.handleJavaFileChange(uri.fsPath, eventType);
+      return;
+    }
+
+    // Get relative path from workspace root
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return;
+    }
+
+    const relativePath = path.relative(workspaceRoot, uri.fsPath);
+    smartLog.debug(
+      `Static resource ${eventType}: ${fileName} (${relativePath})`,
+    );
+
+    // Immediate deployment for static resources (no debouncing)
+    this.deployStaticResourceImmediately(uri.fsPath, eventType);
+  }
+
+  /**
+   * Handle Java source file changes by checking for corresponding compiled files
+   */
+  private async handleJavaFileChange(
+    javaFilePath: string,
+    _eventType: "change" | "create" | "delete",
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return;
+    }
+
+    const fileName = path.basename(javaFilePath, ".java");
+    const relativePath = path.relative(workspaceRoot, javaFilePath);
+    smartLog.debug(`Java source ${fileName}.java changed (${relativePath})`);
+
+    // Single delayed check - wait for compilation to complete
+    const debounceMs = vscode.workspace
+      .getConfiguration("turbocat")
+      .get<number>("smartDeployDebounce", 300);
+    setTimeout(
+      async () => {
         try {
-            // Strategy 1: Find direct class file matches (including inner classes)
-            const directMatches: string[] = [];
-            for (const outputDir of existingOutputDirs) {
-                directMatches.push(...await this.findDirectClassMatches(outputDir, className, javaPackage));
-            }
-
-            // Strategy 2: Find recently modified class files in the same package
-            const recentMatches: string[] = [];
-            for (const outputDir of existingOutputDirs) {
-                recentMatches.push(...await this.findRecentlyModifiedClasses(outputDir, className));
-            }
-
-            // Strategy 3: Find all class files that might be affected by this Java file change
-            const packageMatches: string[] = [];
-            for (const outputDir of existingOutputDirs) {
-                packageMatches.push(...await this.findPackageRelatedClasses(outputDir, className));
-            }
-
-            // Combine all matches and remove duplicates
-            const allMatches = new Set([...directMatches, ...recentMatches, ...packageMatches]);
-            const classFiles = Array.from(allMatches);
-
-            if (classFiles.length === 0) {
-                smartLog.debug(`No compiled classes found for ${className}.java`);
-                return;
-            }
-
-            smartLog.info(`Queued ${classFiles.length} compiled classes for ${className}.java`);
-            
-            // Group files by type for better logging
-            const directCount = directMatches.length;
-            const recentCount = recentMatches.filter(f => !directMatches.includes(f)).length;
-            const packageCount = classFiles.length - directCount - recentCount;
-            
-            smartLog.debug(`Direct matches: ${directCount}, Recent changes: ${recentCount}, Package related: ${packageCount}`);
-            
-            // Add all found class files to batch deployment
-            for (const classFile of classFiles) {
-                const relativePath = path.relative(workspaceRoot, classFile);
-                smartLog.debug(`Queuing class file: ${relativePath}`);
-                this.addToBatchDeployment(classFile, 'change');
-            }
-
-            smartLog.debug(`Added ${classFiles.length} compiled classes to batch deployment`);
-
+          await this.checkAndDeployCompiledClass(javaFilePath, fileName);
         } catch (error) {
-            smartLog.warn(`Failed to scan for compiled classes: ${error}`);
+          smartLog.debug(
+            `Compilation check failed for ${fileName}.java: ${error}`,
+          );
         }
+      },
+      Math.max(debounceMs, 500),
+    );
+  }
+
+  /**
+   * Check for compiled .class files and deploy them
+   * Enhanced version that detects ALL related class files including inner classes
+   */
+  private async checkAndDeployCompiledClass(
+    javaFilePath: string,
+    className: string,
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot || !this.projectStructure) {
+      return;
     }
 
-    /**
-     * Find direct class file matches including inner classes and anonymous classes
-     */
-    private async findDirectClassMatches(outputDir: string, className: string, javaPackage?: string): Promise<string[]> {
-        // Pattern to match:
-        // - ClassName.class (main class)
-        // - ClassName$InnerClass.class (inner classes)
-        // - ClassName$1.class, ClassName$2.class (anonymous classes)
-        // - ClassName$InnerClass$1.class (anonymous classes in inner classes)
-        //
-        // When javaPackage is provided, restrict the search to that package
-        // to avoid deploying identically-named classes from other packages.
-        const packageDir = javaPackage ? javaPackage.replace(/\\/g, '/') : '**';
-        const patterns = [
-            `${outputDir}/${packageDir}/${className}.class`,
-            `${outputDir}/${packageDir}/${className}$*.class`
-        ];
+    const outputDirs = this.resolveCompiledOutputDirectories();
+    const existingOutputDirs = outputDirs.filter((dir) => fs.existsSync(dir));
 
-        const matches: string[] = [];
-        for (const pattern of patterns) {
-            const files = await glob(pattern, {
-                    nodir: true,
-                    windowsPathsNoEscape: process.platform === 'win32',
-                    absolute: true,
-                });
-            matches.push(...files);
-        }
-
-        return [...new Set(matches)]; // Remove duplicates
+    if (!existingOutputDirs.length) {
+      smartLog.debug(
+        `No compiled output directories found. Checked: ${outputDirs.join(", ") || "none"}`,
+      );
+      return;
     }
 
-    /**
-     * Find recently modified class files that might be related to the Java file change
-     */
-    private async findRecentlyModifiedClasses(outputDir: string, className: string): Promise<string[]> {
+    // Derive the Java package from the source file path relative to the source root
+    let javaPackage = "";
+    const sourceRoots = this.projectStructure.javaSourceRoots || [];
+    for (const sourceRoot of sourceRoots) {
+      const absSourceRoot = path.join(workspaceRoot, sourceRoot);
+      if (javaFilePath.startsWith(absSourceRoot + path.sep)) {
+        const relativeToSource = path.relative(absSourceRoot, javaFilePath);
+        javaPackage = path.dirname(relativeToSource).replace(/\\/g, "/");
+        break;
+      }
+    }
+
+    try {
+      // Strategy 1: Find direct class file matches (including inner classes)
+      const directMatches: string[] = [];
+      for (const outputDir of existingOutputDirs) {
+        directMatches.push(
+          ...(await this.findDirectClassMatches(
+            outputDir,
+            className,
+            javaPackage,
+          )),
+        );
+      }
+
+      // Strategy 2: Find recently modified class files in the same package
+      const recentMatches: string[] = [];
+      for (const outputDir of existingOutputDirs) {
+        recentMatches.push(
+          ...(await this.findRecentlyModifiedClasses(outputDir, className)),
+        );
+      }
+
+      // Strategy 3: Find all class files that might be affected by this Java file change
+      const packageMatches: string[] = [];
+      for (const outputDir of existingOutputDirs) {
+        packageMatches.push(
+          ...(await this.findPackageRelatedClasses(outputDir, className)),
+        );
+      }
+
+      // Combine all matches and remove duplicates
+      const allMatches = new Set([
+        ...directMatches,
+        ...recentMatches,
+        ...packageMatches,
+      ]);
+      const classFiles = Array.from(allMatches);
+
+      if (classFiles.length === 0) {
+        smartLog.debug(`No compiled classes found for ${className}.java`);
+        return;
+      }
+
+      smartLog.info(
+        `Queued ${classFiles.length} compiled classes for ${className}.java`,
+      );
+
+      // Group files by type for better logging
+      const directCount = directMatches.length;
+      const recentCount = recentMatches.filter(
+        (f) => !directMatches.includes(f),
+      ).length;
+      const packageCount = classFiles.length - directCount - recentCount;
+
+      smartLog.debug(
+        `Direct matches: ${directCount}, Recent changes: ${recentCount}, Package related: ${packageCount}`,
+      );
+
+      // Add all found class files to batch deployment
+      for (const classFile of classFiles) {
+        const relativePath = path.relative(workspaceRoot, classFile);
+        smartLog.debug(`Queuing class file: ${relativePath}`);
+        this.addToBatchDeployment(classFile, "change");
+      }
+
+      smartLog.debug(
+        `Added ${classFiles.length} compiled classes to batch deployment`,
+      );
+    } catch (error) {
+      smartLog.warn(`Failed to scan for compiled classes: ${error}`);
+    }
+  }
+
+  /**
+   * Find direct class file matches including inner classes and anonymous classes
+   */
+  private async findDirectClassMatches(
+    outputDir: string,
+    className: string,
+    javaPackage?: string,
+  ): Promise<string[]> {
+    // Pattern to match:
+    // - ClassName.class (main class)
+    // - ClassName$InnerClass.class (inner classes)
+    // - ClassName$1.class, ClassName$2.class (anonymous classes)
+    // - ClassName$InnerClass$1.class (anonymous classes in inner classes)
+    //
+    // When javaPackage is provided, restrict the search to that package
+    // to avoid deploying identically-named classes from other packages.
+    const packageDir = javaPackage ? javaPackage.replace(/\\/g, "/") : "**";
+    const patterns = [
+      `${outputDir}/${packageDir}/${className}.class`,
+      `${outputDir}/${packageDir}/${className}$*.class`,
+    ];
+
+    const matches: string[] = [];
+    for (const pattern of patterns) {
+      const files = await glob(pattern, {
+        nodir: true,
+        windowsPathsNoEscape: process.platform === "win32",
+        absolute: true,
+      });
+      matches.push(...files);
+    }
+
+    return [...new Set(matches)]; // Remove duplicates
+  }
+
+  /**
+   * Find recently modified class files that might be related to the Java file change
+   */
+  private async findRecentlyModifiedClasses(
+    outputDir: string,
+    className: string,
+  ): Promise<string[]> {
+    const now = Date.now();
+    const fiveSecondsAgo = now - 5000; // Look for files modified in the last 5 seconds
+
+    try {
+      // Get the package directory where this class should be located
+      const allClassFiles = await glob(`${outputDir}/**/*.class`);
+      const recentFiles: string[] = [];
+
+      // Find the main class file to determine the package structure
+      const mainClassFiles = allClassFiles.filter(
+        (file) => path.basename(file) === `${className}.class`,
+      );
+
+      if (mainClassFiles.length > 0) {
+        // Get the directory of the main class file
+        const classDir = path.dirname(mainClassFiles[0]);
+
+        // Check all class files in the same directory for recent modifications
+        const packageClassFiles = await glob(`${classDir}/*.class`);
+
+        for (const classFile of packageClassFiles) {
+          try {
+            const stats = fs.statSync(classFile);
+            if (stats.mtime.getTime() > fiveSecondsAgo) {
+              recentFiles.push(classFile);
+            }
+          } catch (error) {
+            // File might have been deleted, ignore
+          }
+        }
+      }
+
+      return recentFiles;
+    } catch (error) {
+      smartLog.debug(`Error finding recently modified classes: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Find package-related class files that might be affected by interdependencies
+   */
+  private async findPackageRelatedClasses(
+    outputDir: string,
+    className: string,
+  ): Promise<string[]> {
+    try {
+      // This is a more conservative approach - we look for classes that might have dependencies
+      // For now, we'll focus on the immediate package, but this could be expanded
+
+      const allClassFiles = await glob(`${outputDir}/**/*.class`);
+      const relatedFiles: string[] = [];
+
+      // Find classes in the same package that were recently modified
+      const mainClassFiles = allClassFiles.filter(
+        (file) => path.basename(file) === `${className}.class`,
+      );
+
+      if (mainClassFiles.length > 0) {
+        const classDir = path.dirname(mainClassFiles[0]);
+        const packageName = path.relative(outputDir, classDir);
+
+        // For now, include all recently modified files in the same package
+        // This could be made more sophisticated by analyzing actual dependencies
         const now = Date.now();
-        const fiveSecondsAgo = now - 5000; // Look for files modified in the last 5 seconds
-        
-        try {
-            // Get the package directory where this class should be located
-            const allClassFiles = await glob(`${outputDir}/**/*.class`);
-            const recentFiles: string[] = [];
-            
-            // Find the main class file to determine the package structure
-            const mainClassFiles = allClassFiles.filter(file => 
-                path.basename(file) === `${className}.class`
-            );
-            
-            if (mainClassFiles.length > 0) {
-                // Get the directory of the main class file
-                const classDir = path.dirname(mainClassFiles[0]);
-                
-                // Check all class files in the same directory for recent modifications
-                const packageClassFiles = await glob(`${classDir}/*.class`);
-                
-                for (const classFile of packageClassFiles) {
-                    try {
-                        const stats = fs.statSync(classFile);
-                        if (stats.mtime.getTime() > fiveSecondsAgo) {
-                            recentFiles.push(classFile);
-                        }
-                    } catch (error) {
-                        // File might have been deleted, ignore
-                    }
-                }
+        const tenSecondsAgo = now - 10000; // Slightly longer window for package dependencies
+
+        const packageFiles = await glob(`${classDir}/*.class`);
+        for (const file of packageFiles) {
+          try {
+            const stats = fs.statSync(file);
+            if (stats.mtime.getTime() > tenSecondsAgo) {
+              relatedFiles.push(file);
             }
-            
-            return recentFiles;
-        } catch (error) {
-            smartLog.debug(`Error finding recently modified classes: ${error}`);
-            return [];
+          } catch (error) {
+            // Ignore errors
+          }
         }
+
+        if (relatedFiles.length > 1) {
+          // More than just the main class
+          smartLog.debug(
+            `Found ${relatedFiles.length} potentially related classes in package: ${packageName}`,
+          );
+        }
+      }
+
+      return relatedFiles;
+    } catch (error) {
+      smartLog.debug(`Error finding package-related classes: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * NEW: Handle compiled file changes with intelligent batch processing
+   * Processes .class files from target/build directories with batch optimization
+   */
+  private handleCompiledFileChange(
+    uri: vscode.Uri,
+    eventType: "change" | "create" | "delete",
+  ): void {
+    const fileName = path.basename(uri.fsPath);
+    const fileExt = path.extname(uri.fsPath).toLowerCase();
+
+    if (this.shouldBypassFile(uri.fsPath)) {
+      smartLog.debug(`Bypassing sync for compiled file: ${fileName}`);
+      return;
     }
 
-    /**
-     * Find package-related class files that might be affected by interdependencies
-     */
-    private async findPackageRelatedClasses(outputDir: string, className: string): Promise<string[]> {
-        try {
-            // This is a more conservative approach - we look for classes that might have dependencies
-            // For now, we'll focus on the immediate package, but this could be expanded
-            
-            const allClassFiles = await glob(`${outputDir}/**/*.class`);
-            const relatedFiles: string[] = [];
-            
-            // Find classes in the same package that were recently modified
-            const mainClassFiles = allClassFiles.filter(file => 
-                path.basename(file) === `${className}.class`
-            );
-            
-            if (mainClassFiles.length > 0) {
-                const classDir = path.dirname(mainClassFiles[0]);
-                const packageName = path.relative(outputDir, classDir);
-                
-                // For now, include all recently modified files in the same package
-                // This could be made more sophisticated by analyzing actual dependencies
-                const now = Date.now();
-                const tenSecondsAgo = now - 10000; // Slightly longer window for package dependencies
-                
-                const packageFiles = await glob(`${classDir}/*.class`);
-                for (const file of packageFiles) {
-                    try {
-                        const stats = fs.statSync(file);
-                        if (stats.mtime.getTime() > tenSecondsAgo) {
-                            relatedFiles.push(file);
-                        }
-                    } catch (error) {
-                        // Ignore errors
-                    }
-                }
-                
-                if (relatedFiles.length > 1) { // More than just the main class
-                    smartLog.debug(`Found ${relatedFiles.length} potentially related classes in package: ${packageName}`);
-                }
-            }
-            
-            return relatedFiles;
-        } catch (error) {
-            smartLog.debug(`Error finding package-related classes: ${error}`);
-            return [];
-        }
+    // Only process .class files
+    if (fileExt !== ".class") {
+      smartLog.debug(`Skipping non-class file: ${fileName}`);
+      return;
     }
 
-    /**
-     * NEW: Handle compiled file changes with intelligent batch processing
-     * Processes .class files from target/build directories with batch optimization
-     */
-    private handleCompiledFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
-        const fileName = path.basename(uri.fsPath);
-        const fileExt = path.extname(uri.fsPath).toLowerCase();
-        
-        if (this.shouldBypassFile(uri.fsPath)) {
-            smartLog.debug(`Bypassing sync for compiled file: ${fileName}`);
-            return;
-        }
-        
-        // Only process .class files
-        if (fileExt !== '.class') {
-            smartLog.debug(`Skipping non-class file: ${fileName}`);
-            return;
-        }
-        
-        // Get relative path from workspace root
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return;
-        }
-        
-        const relativePath = path.relative(workspaceRoot, uri.fsPath);
-        smartLog.debug(`Compiled file ${eventType}: ${fileName} (${relativePath})`);
-        
-        // Use batch deployment for compiled files
-        this.addToBatchDeployment(uri.fsPath, eventType);
+    // Get relative path from workspace root
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return;
     }
 
-    /**
-     * Determine whether a file should be bypassed from synchronization
-     */
-    private shouldBypassFile(filePath: string): boolean {
-        if (!this.syncBypassPatterns.length) {
-            return false;
-        }
+    const relativePath = path.relative(workspaceRoot, uri.fsPath);
+    smartLog.debug(`Compiled file ${eventType}: ${fileName} (${relativePath})`);
 
-        const baseName = path.basename(filePath);
-        return this.syncBypassPatterns.some(pattern => pattern.test(baseName));
+    // Use batch deployment for compiled files
+    this.addToBatchDeployment(uri.fsPath, eventType);
+  }
+
+  /**
+   * Determine whether a file should be bypassed from synchronization
+   */
+  private shouldBypassFile(filePath: string): boolean {
+    if (!this.syncBypassPatterns.length) {
+      return false;
     }
 
-    // LEGACY: Old deployment methods (commented out for new dual-watcher architecture)
-    // These methods were used in the previous hybrid approach
-    
-    /*
+    const baseName = path.basename(filePath);
+    return this.syncBypassPatterns.some((pattern) => pattern.test(baseName));
+  }
+
+  // LEGACY: Old deployment methods (commented out for new dual-watcher architecture)
+  // These methods were used in the previous hybrid approach
+
+  /*
     private async deployCompiledClassWithMapping(sourceJavaPath: string, relativePath: string): Promise<void> {
         // ... (implementation commented out)
     }
 
     private async deploySourceFileWithMapping(sourceFilePath: string): Promise<void> {
-        // ... (implementation commented out)  
+        // ... (implementation commented out)
     }
     */
 
-    /**
-     * NEW: Immediate deployment for static resources (no debouncing)
-     */
-    private async deployStaticResourceImmediately(filePath: string, eventType: 'change' | 'create' | 'delete'): Promise<void> {
-        try {
-            if (eventType === 'delete') {
-                await this.removeDeployedFile(filePath, 'static');
-                return;
-            }
+  /**
+   * NEW: Immediate deployment for static resources (no debouncing)
+   */
+  private async deployStaticResourceImmediately(
+    filePath: string,
+    eventType: "change" | "create" | "delete",
+  ): Promise<void> {
+    try {
+      if (eventType === "delete") {
+        await this.removeDeployedFile(filePath, "static");
+        return;
+      }
 
-            // Find matching mapping for the source file
-            const mapping = this.findMatchingMapping(filePath);
-            if (!mapping) {
-                const fileName = path.basename(filePath);
-                smartLog.debug(`No mapping found for static resource: ${fileName}`);
-                return;
-            }
-            
-            // Generate destination path using mapping configuration
-            const targetPath = await this.generateDestinationPath(mapping, filePath);
-            if (!targetPath) {
-                const fileName = path.basename(filePath);
-                smartLog.warn(`Failed to generate target path for: ${fileName}`);
-                return;
-            }
-            
-            await this.copyFileWithLogging(filePath, targetPath, 'static');
-            
-            const fileName = path.basename(filePath);
-            const webappsRoot = await getTomcat().getWebappsRoot();
-            const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
-            smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
-            
-        } catch (error) {
-            smartLog.error(`Static resource deployment failed for ${path.basename(filePath)}`, error as string);
-        }
-    }
-
-    /**
-     * NEW: Add file to batch deployment queue with intelligent batching
-     * Collects multiple class file changes and deploys them together
-     */
-    private addToBatchDeployment(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
-        const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
-        
-        // Add file to pending batch (using Map to store both path and event type)
-        this.pendingCompiledFiles.add(JSON.stringify({ filePath, eventType }));
-        
-        smartLog.debug(`Added to batch: ${path.basename(filePath)} (${eventType}) - ${this.pendingCompiledFiles.size} files queued`);
-        
-        // Clear existing batch timer and start new one
-        if (this.batchDeploymentTimer) {
-            clearTimeout(this.batchDeploymentTimer);
-        }
-        
-        this.batchDeploymentTimer = setTimeout(async () => {
-            await this.executeBatchDeployment();
-        }, debounceTime);
-    }
-
-    /**
-     * Execute batch deployment of all pending compiled files
-     */
-    private async executeBatchDeployment(): Promise<void> {
-        if (this.pendingCompiledFiles.size === 0) {
-            return;
-        }
-
-        const batchSize = this.pendingCompiledFiles.size;
-        smartLog.info(`Executing batch deployment for ${batchSize} compiled files`);
-        
-        // Convert Set to array and parse file information
-        const filesToDeploy = Array.from(this.pendingCompiledFiles).map(item => JSON.parse(item));
-        
-        // Clear pending files
-        this.pendingCompiledFiles.clear();
-        this.batchDeploymentTimer = undefined;
-        
-        let successCount = 0;
-        let errorCount = 0;
-        
-        // Deploy all files in batch
-        for (const { filePath, eventType } of filesToDeploy) {
-            try {
-                await this.executeCompiledFileDeployment(filePath, eventType);
-                successCount++;
-            } catch (error) {
-                smartLog.error(`Batch deploy failed for ${path.basename(filePath)}`, error as string);
-                errorCount++;
-            }
-        }
-        
-        // Log batch results
-        if (successCount > 0) {
-            smartLog.info(`Batch deployment completed: ${successCount} files deployed`);
-        }
-        if (errorCount > 0) {
-            smartLog.warn(`Batch deployment had ${errorCount} errors`);
-        }
-        
-        // Optional: Trigger single reload after batch deployment instead of per-file
-        // This is more efficient for multiple class changes
-        // TODO: Implement conditional reload based on mapping configuration
-    }
-
-    // LEGACY: Individual file deployment method (commented out in favor of batch processing)
-    // private deployCompiledFileWithDelay(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
-    //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
-    //     
-    //     getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
-    //     
-    //     if (this.compiledFileDebouncer.has(filePath)) {
-    //         clearTimeout(this.compiledFileDebouncer.get(filePath)!);
-    //     }
-    //     
-    //     this.compiledFileDebouncer.set(filePath, setTimeout(async () => {
-    //         try {
-    //             await this.executeCompiledFileDeployment(filePath, eventType);
-    //         } catch (error) {
-    //             getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
-    //         } finally {
-    //             this.compiledFileDebouncer.delete(filePath);
-    //         }
-    //     }, debounceTime));
-    // }
-
-    /**
-     * Execute compiled file deployment logic
-     */
-    private async executeCompiledFileDeployment(filePath: string, eventType: 'change' | 'create' | 'delete'): Promise<void> {
-        if (eventType === 'delete') {
-            await this.removeDeployedFile(filePath, 'class');
-            return;
-        }
-
-        // Find matching mapping for the compiled .class file
-        const mapping = this.findMatchingMapping(filePath);
-        if (!mapping) {
-            smartLog.debug(`No mapping found for compiled class: ${path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', filePath)}`);
-            return;
-        }
-        
-        // Generate destination path using mapping configuration
-        const targetPath = await this.generateDestinationPath(mapping, filePath);
-        if (!targetPath) {
-            smartLog.warn(`Failed to generate target path for: ${path.basename(filePath)}`);
-            return;
-        }
-        
-        await this.copyFileWithLogging(filePath, targetPath, 'class');
-        
+      // Find matching mapping for the source file
+      const mapping = this.findMatchingMapping(filePath);
+      if (!mapping) {
         const fileName = path.basename(filePath);
-        const webappsRoot = await getTomcat().getWebappsRoot();
-        const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
-        smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
+        smartLog.debug(`No mapping found for static resource: ${fileName}`);
+        return;
+      }
+
+      // Generate destination path using mapping configuration
+      const targetPath = await this.generateDestinationPath(mapping, filePath);
+      if (!targetPath) {
+        const fileName = path.basename(filePath);
+        smartLog.warn(`Failed to generate target path for: ${fileName}`);
+        return;
+      }
+
+      await this.copyFileWithLogging(filePath, targetPath, "static");
+
+      const fileName = path.basename(filePath);
+      const webappsRoot = await getTomcat().getWebappsRoot();
+      const relativePath = webappsRoot
+        ? path.relative(webappsRoot, targetPath)
+        : path.basename(targetPath);
+      smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
+    } catch (error) {
+      smartLog.error(
+        `Static resource deployment failed for ${path.basename(filePath)}`,
+        error as string,
+      );
+    }
+  }
+
+  /**
+   * NEW: Add file to batch deployment queue with intelligent batching
+   * Collects multiple class file changes and deploys them together
+   */
+  private addToBatchDeployment(
+    filePath: string,
+    eventType: "change" | "create" | "delete",
+  ): void {
+    const debounceTime = vscode.workspace
+      .getConfiguration("turbocat")
+      .get<number>("smartDeployDebounce", 300);
+
+    // Add file to pending batch (using Map to store both path and event type)
+    this.pendingCompiledFiles.add(JSON.stringify({ filePath, eventType }));
+
+    smartLog.debug(
+      `Added to batch: ${path.basename(filePath)} (${eventType}) - ${this.pendingCompiledFiles.size} files queued`,
+    );
+
+    // Clear existing batch timer and start new one
+    if (this.batchDeploymentTimer) {
+      clearTimeout(this.batchDeploymentTimer);
     }
 
-    private async removeDeployedFile(filePath: string, type: 'class' | 'static'): Promise<void> {
-        const mapping = this.findMatchingMapping(filePath);
-        if (!mapping) {
-            smartLog.debug(`No mapping found for deleted ${type} file: ${path.basename(filePath)}`);
-            return;
-        }
+    this.batchDeploymentTimer = setTimeout(async () => {
+      await this.executeBatchDeployment();
+    }, debounceTime);
+  }
 
-        const targetPath = await this.generateDestinationPath(mapping, filePath, { ensureParent: false });
-        if (!targetPath) {
-            smartLog.warn(`Failed to generate delete target for: ${path.basename(filePath)}`);
-            return;
-        }
-
-        if (!fs.existsSync(targetPath)) {
-            smartLog.debug(`Deployed ${type} file already absent: ${path.basename(targetPath)}`);
-            return;
-        }
-
-        fs.rmSync(targetPath, { force: true });
-        const webappsRoot = await getTomcat().getWebappsRoot();
-        const relativePath = webappsRoot ? path.relative(webappsRoot, targetPath) : path.basename(targetPath);
-        smartLog.info(`Removed deployed ${type}: ${relativePath}`);
+  /**
+   * Execute batch deployment of all pending compiled files
+   */
+  private async executeBatchDeployment(): Promise<void> {
+    if (this.pendingCompiledFiles.size === 0) {
+      return;
     }
 
-    // LEGACY: Old debounced deploy method (commented out)
-    // private debouncedDeploy(filePath: string, deployFn: () => Promise<void>): void {
-    //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
-    //     
-    //     // Debug log to verify configuration is being read correctly
-    //     getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
-    //     
-    //     if (this.deployDebouncer.has(filePath)) {
-    //         clearTimeout(this.deployDebouncer.get(filePath)!);
-    //     }
-    //     
-    //     this.deployDebouncer.set(filePath, setTimeout(async () => {
-    //         try {
-    //             await deployFn();
-    //         } catch (error) {
-    //             getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
-    //         } finally {
-    //             this.deployDebouncer.delete(filePath);
-    //         }
-    //     }, debounceTime));
-    // }
+    const batchSize = this.pendingCompiledFiles.size;
+    smartLog.info(`Executing batch deployment for ${batchSize} compiled files`);
 
-    /**
-     * Copy file with progress indication and logging
-     */
-    private async copyFileWithLogging(source: string, target: string, type: 'class' | 'static' | 'local'): Promise<void> {
-        try {
-            // Check if source file exists
-            if (!fs.existsSync(source)) {
-                smartLog.warn(`Smart deploy: Source file not found: ${path.basename(source)}`);
-                return;
-            }
+    // Convert Set to array and parse file information
+    const filesToDeploy = Array.from(this.pendingCompiledFiles).map((item) =>
+      JSON.parse(item),
+    );
 
-            // Ensure target directory exists
-            const targetDir = path.dirname(target);
-            if (!fs.existsSync(targetDir)) {
-                fs.mkdirSync(targetDir, { recursive: true });
-            }
+    // Clear pending files
+    this.pendingCompiledFiles.clear();
+    this.batchDeploymentTimer = undefined;
 
-            // Copy the file
-            fs.copyFileSync(source, target);
-            
-            const fileName = path.basename(source);
-            const label = type === 'class'
-                ? 'Smart deployed class'
-                : type === 'static'
-                    ? 'Smart deployed static'
-                    : 'Local mapping synced';
-            smartLog.debug(`${label}: ${fileName}`);
-        } catch (error) {
-            throw error;
-        }
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Deploy all files in batch
+    for (const { filePath, eventType } of filesToDeploy) {
+      try {
+        await this.executeCompiledFileDeployment(filePath, eventType);
+        successCount++;
+      } catch (error) {
+        smartLog.error(
+          `Batch deploy failed for ${path.basename(filePath)}`,
+          error as string,
+        );
+        errorCount++;
+      }
     }
 
-    /**
-     * Check if file is a static web resource
-     */
-    // private isStaticWebResource(filePath: string): boolean {
-    //     const webExtensions = [
-    //         '.html', '.htm', '.css', '.js', '.json', '.xml', '.jsp', '.jspf', 
-    //         '.tag', '.tld', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', 
-    //         '.txt', '.properties', '.woff', '.woff2', '.ttf', '.eot', '.md'
-    //     ];
-        
-    //     const ext = path.extname(filePath).toLowerCase();
-        
-    //     // Exclude files in typical output directories
-    //     if (this.projectStructure) {
-    //         const outputDir = this.projectStructure.javaOutputDir;
-    //         if (filePath.includes(outputDir)) {
-    //             return false;
-    //         }
-    //     }
-        
-    //     return webExtensions.includes(ext);
-    // }
-
-    /**
-     * Dispose smart deploy watchers (dual-watcher approach with batch cleanup)
-     */
-    public disposeSmartDeploy(): void {
-        this.disposeFileWatchers();
-        
-        // Clear batch deployment timer and pending files
-        if (this.batchDeploymentTimer) {
-            clearTimeout(this.batchDeploymentTimer);
-            this.batchDeploymentTimer = undefined;
-        }
-        this.pendingCompiledFiles.clear();
-        
-        smartLog.debug('Smart deploy cleanup: All watchers and timers disposed');
+    // Log batch results
+    if (successCount > 0) {
+      smartLog.info(
+        `Batch deployment completed: ${successCount} files deployed`,
+      );
+    }
+    if (errorCount > 0) {
+      smartLog.warn(`Batch deployment had ${errorCount} errors`);
     }
 
-    /**
-     * Test method to manually test dual-watcher deployment
-     */
-    public async testDualWatcherDeploy(): Promise<void> {
-        if (!this.projectStructure) {
-            smartLog.debug('Test deploy: No project structure found');
-            return;
-        }
+    // Optional: Trigger single reload after batch deployment instead of per-file
+    // This is more efficient for multiple class changes
+    // TODO: Implement conditional reload based on mapping configuration
+  }
 
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            smartLog.debug('Test deploy: No workspace root found');
-            return;
-        }
+  // LEGACY: Individual file deployment method (commented out in favor of batch processing)
+  // private deployCompiledFileWithDelay(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
+  //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
+  //
+  //     getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+  //
+  //     if (this.compiledFileDebouncer.has(filePath)) {
+  //         clearTimeout(this.compiledFileDebouncer.get(filePath)!);
+  //     }
+  //
+  //     this.compiledFileDebouncer.set(filePath, setTimeout(async () => {
+  //         try {
+  //             await this.executeCompiledFileDeployment(filePath, eventType);
+  //         } catch (error) {
+  //             getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
+  //         } finally {
+  //             this.compiledFileDebouncer.delete(filePath);
+  //         }
+  //     }, debounceTime));
+  // }
 
-        smartLog.info('🧪 Testing dual-watcher deployment system...');
-
-        try {
-            // Test static resource deployment
-            const srcPath = path.join(workspaceRoot, 'src');
-            if (fs.existsSync(srcPath)) {
-                const staticFiles = await this.findFiles(path.join(srcPath, '**', '*.{html,css,js,jsp}'));
-                smartLog.debug(`Test deploy: Found ${staticFiles.length} static files`);
-                
-                for (const file of staticFiles.slice(0, 1)) { // Test with first file
-                    smartLog.debug(`Test static deploy: Processing ${file}`);
-                    const uri = vscode.Uri.file(file);
-                    this.handleStaticResourceChange(uri, 'create');
-                }
-            }
-
-            // Test compiled file deployment if target directory exists (simulate batch changes)
-            const targetPath = path.join(workspaceRoot, this.projectStructure.javaOutputDir);
-            if (fs.existsSync(targetPath)) {
-                const classFiles = await this.findFiles(path.join(targetPath, '**', '*.class'));
-                smartLog.debug(`Test deploy: Found ${classFiles.length} class files`);
-                
-                // Simulate multiple class files changing at once (batch scenario)
-                const testFiles = classFiles.slice(0, Math.min(3, classFiles.length));
-                smartLog.info(`🧪 Simulating batch change: ${testFiles.length} class files`);
-                
-                testFiles.forEach((file, index) => {
-                    smartLog.debug(`Test batch compile deploy ${index + 1}: Processing ${file}`);
-                    const uri = vscode.Uri.file(file);
-                    // All files will be batched together automatically
-                    this.handleCompiledFileChange(uri, 'create');
-                });
-                
-                if (testFiles.length > 1) {
-                    smartLog.info(`⏱️ Batch processing will execute in ${vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300)}ms...`);
-                }
-            }
-
-            smartLog.info('✅ Dual-watcher deployment test completed');
-        } catch (error) {
-            smartLog.error('Dual-watcher test failed', error as string);
-        }
+  /**
+   * Execute compiled file deployment logic
+   */
+  private async executeCompiledFileDeployment(
+    filePath: string,
+    eventType: "change" | "create" | "delete",
+  ): Promise<void> {
+    if (eventType === "delete") {
+      await this.removeDeployedFile(filePath, "class");
+      return;
     }
-    
-    /**
-     * Project Scaffolding System
-     * 
-     * Implements new project initialization with:
-     * 1. User confirmation flow
-     * 2. Extension dependency verification
-     * 3. Maven archetype selection
-     * 4. Workspace configuration
-     * 5. Error recovery
-     * 
-     */
-    private async createNewProject(): Promise<void> {
-        const answer = await vscode.window.showInformationMessage(
-            'No Java EE project found. Do you want to create a new one?',
-            'Yes', 'No'
+
+    // Find matching mapping for the compiled .class file
+    const mapping = this.findMatchingMapping(filePath);
+    if (!mapping) {
+      smartLog.debug(
+        `No mapping found for compiled class: ${path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "", filePath)}`,
+      );
+      return;
+    }
+
+    // Generate destination path using mapping configuration
+    const targetPath = await this.generateDestinationPath(mapping, filePath);
+    if (!targetPath) {
+      smartLog.warn(
+        `Failed to generate target path for: ${path.basename(filePath)}`,
+      );
+      return;
+    }
+
+    await this.copyFileWithLogging(filePath, targetPath, "class");
+
+    const fileName = path.basename(filePath);
+    const webappsRoot = await getTomcat().getWebappsRoot();
+    const relativePath = webappsRoot
+      ? path.relative(webappsRoot, targetPath)
+      : path.basename(targetPath);
+    smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
+  }
+
+  private async removeDeployedFile(
+    filePath: string,
+    type: "class" | "static",
+  ): Promise<void> {
+    const mapping = this.findMatchingMapping(filePath);
+    if (!mapping) {
+      smartLog.debug(
+        `No mapping found for deleted ${type} file: ${path.basename(filePath)}`,
+      );
+      return;
+    }
+
+    const targetPath = await this.generateDestinationPath(mapping, filePath, {
+      ensureParent: false,
+    });
+    if (!targetPath) {
+      smartLog.warn(
+        `Failed to generate delete target for: ${path.basename(filePath)}`,
+      );
+      return;
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      smartLog.debug(
+        `Deployed ${type} file already absent: ${path.basename(targetPath)}`,
+      );
+      return;
+    }
+
+    fs.rmSync(targetPath, { force: true });
+    const webappsRoot = await getTomcat().getWebappsRoot();
+    const relativePath = webappsRoot
+      ? path.relative(webappsRoot, targetPath)
+      : path.basename(targetPath);
+    smartLog.info(`Removed deployed ${type}: ${relativePath}`);
+  }
+
+  // LEGACY: Old debounced deploy method (commented out)
+  // private debouncedDeploy(filePath: string, deployFn: () => Promise<void>): void {
+  //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
+  //
+  //     // Debug log to verify configuration is being read correctly
+  //     getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+  //
+  //     if (this.deployDebouncer.has(filePath)) {
+  //         clearTimeout(this.deployDebouncer.get(filePath)!);
+  //     }
+  //
+  //     this.deployDebouncer.set(filePath, setTimeout(async () => {
+  //         try {
+  //             await deployFn();
+  //         } catch (error) {
+  //             getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
+  //         } finally {
+  //             this.deployDebouncer.delete(filePath);
+  //         }
+  //     }, debounceTime));
+  // }
+
+  /**
+   * Copy file with progress indication and logging
+   */
+  private async copyFileWithLogging(
+    source: string,
+    target: string,
+    type: "class" | "static" | "local",
+  ): Promise<void> {
+    try {
+      // Check if source file exists
+      if (!fs.existsSync(source)) {
+        smartLog.warn(
+          `Smart deploy: Source file not found: ${path.basename(source)}`,
+        );
+        return;
+      }
+
+      // Ensure target directory exists
+      const targetDir = path.dirname(target);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      // Copy the file
+      fs.copyFileSync(source, target);
+
+      const fileName = path.basename(source);
+      const label =
+        type === "class"
+          ? "Smart deployed class"
+          : type === "static"
+            ? "Smart deployed static"
+            : "Local mapping synced";
+      smartLog.debug(`${label}: ${fileName}`);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Check if file is a static web resource
+   */
+  // private isStaticWebResource(filePath: string): boolean {
+  //     const webExtensions = [
+  //         '.html', '.htm', '.css', '.js', '.json', '.xml', '.jsp', '.jspf',
+  //         '.tag', '.tld', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico',
+  //         '.txt', '.properties', '.woff', '.woff2', '.ttf', '.eot', '.md'
+  //     ];
+
+  //     const ext = path.extname(filePath).toLowerCase();
+
+  //     // Exclude files in typical output directories
+  //     if (this.projectStructure) {
+  //         const outputDir = this.projectStructure.javaOutputDir;
+  //         if (filePath.includes(outputDir)) {
+  //             return false;
+  //         }
+  //     }
+
+  //     return webExtensions.includes(ext);
+  // }
+
+  /**
+   * Dispose smart deploy watchers (dual-watcher approach with batch cleanup)
+   */
+  public disposeSmartDeploy(): void {
+    this.disposeFileWatchers();
+
+    // Clear batch deployment timer and pending files
+    if (this.batchDeploymentTimer) {
+      clearTimeout(this.batchDeploymentTimer);
+      this.batchDeploymentTimer = undefined;
+    }
+    this.pendingCompiledFiles.clear();
+
+    smartLog.debug("Smart deploy cleanup: All watchers and timers disposed");
+  }
+
+  /**
+   * Test method to manually test dual-watcher deployment
+   */
+  public async testDualWatcherDeploy(): Promise<void> {
+    if (!this.projectStructure) {
+      smartLog.debug("Test deploy: No project structure found");
+      return;
+    }
+
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      smartLog.debug("Test deploy: No workspace root found");
+      return;
+    }
+
+    smartLog.info("🧪 Testing dual-watcher deployment system...");
+
+    try {
+      // Test static resource deployment
+      const srcPath = path.join(workspaceRoot, "src");
+      if (fs.existsSync(srcPath)) {
+        const staticFiles = await this.findFiles(
+          path.join(srcPath, "**", "*.{html,css,js,jsp}"),
+        );
+        smartLog.debug(`Test deploy: Found ${staticFiles.length} static files`);
+
+        for (const file of staticFiles.slice(0, 1)) {
+          // Test with first file
+          smartLog.debug(`Test static deploy: Processing ${file}`);
+          const uri = vscode.Uri.file(file);
+          this.handleStaticResourceChange(uri, "create");
+        }
+      }
+
+      // Test compiled file deployment if target directory exists (simulate batch changes)
+      const targetPath = path.join(
+        workspaceRoot,
+        this.projectStructure.javaOutputDir,
+      );
+      if (fs.existsSync(targetPath)) {
+        const classFiles = await this.findFiles(
+          path.join(targetPath, "**", "*.class"),
+        );
+        smartLog.debug(`Test deploy: Found ${classFiles.length} class files`);
+
+        // Simulate multiple class files changing at once (batch scenario)
+        const testFiles = classFiles.slice(0, Math.min(3, classFiles.length));
+        smartLog.info(
+          `🧪 Simulating batch change: ${testFiles.length} class files`,
         );
 
-        if (answer === 'Yes') {
-            try {
-                const commands = await vscode.commands.getCommands();
-                if (!commands.includes('java.project.create')) {
-                    const installMessage = 'Java Extension Pack required for project creation';
-                    vscode.window.showErrorMessage(installMessage, 'Install Extension').then(async choice => {
-                        if (choice === 'Install Extension') {
-                            await env.openExternal(vscode.Uri.parse(
-                                'vscode:extension/vscjava.vscode-java-pack'
-                            ));
-                        }
-                    });
-                    return;
-                }
+        testFiles.forEach((file, index) => {
+          smartLog.debug(
+            `Test batch compile deploy ${index + 1}: Processing ${file}`,
+          );
+          const uri = vscode.Uri.file(file);
+          // All files will be batched together automatically
+          this.handleCompiledFileChange(uri, "create");
+        });
 
-                await vscode.commands.executeCommand('java.project.create', {
-                    type: 'maven',
-                    archetype: 'maven-archetype-webapp'
-                });
-                getLogger().info('New Maven web app project created');
-            } catch (err) {
-                vscode.window.showErrorMessage(
-                    'Project creation failed. Ensure Java Extension Pack is installed and configured.',
-                    'Open Extensions'
-                ).then(choice => {
-                    if (choice === 'Open Extensions') {
-                        vscode.commands.executeCommand('workbench.extensions.action.showExtensions');
-                    }
-                });
-            }
-        } else {
-            getLogger().success('Tomcat deploy canceled', true);
+        if (testFiles.length > 1) {
+          smartLog.info(
+            `⏱️ Batch processing will execute in ${vscode.workspace.getConfiguration("turbocat").get<number>("smartDeployDebounce", 300)}ms...`,
+          );
         }
+      }
+
+      smartLog.info("✅ Dual-watcher deployment test completed");
+    } catch (error) {
+      smartLog.error("Dual-watcher test failed", error as string);
+    }
+  }
+
+  /**
+   * Project Scaffolding System
+   *
+   * Implements new project initialization with:
+   * 1. User confirmation flow
+   * 2. Extension dependency verification
+   * 3. Maven archetype selection
+   * 4. Workspace configuration
+   * 5. Error recovery
+   *
+   */
+  private async createNewProject(): Promise<void> {
+    const answer = await vscode.window.showInformationMessage(
+      "No Java EE project found. Do you want to create a new one?",
+      "Yes",
+      "No",
+    );
+
+    if (answer === "Yes") {
+      try {
+        const commands = await vscode.commands.getCommands();
+        if (!commands.includes("java.project.create")) {
+          const installMessage =
+            "Java Extension Pack required for project creation";
+          vscode.window
+            .showErrorMessage(installMessage, "Install Extension")
+            .then(async (choice) => {
+              if (choice === "Install Extension") {
+                await env.openExternal(
+                  vscode.Uri.parse("vscode:extension/vscjava.vscode-java-pack"),
+                );
+              }
+            });
+          return;
+        }
+
+        await vscode.commands.executeCommand("java.project.create", {
+          type: "maven",
+          archetype: "maven-archetype-webapp",
+        });
+        getLogger().info("New Maven web app project created");
+      } catch (err) {
+        vscode.window
+          .showErrorMessage(
+            "Project creation failed. Ensure Java Extension Pack is installed and configured.",
+            "Open Extensions",
+          )
+          .then((choice) => {
+            if (choice === "Open Extensions") {
+              vscode.commands.executeCommand(
+                "workbench.extensions.action.showExtensions",
+              );
+            }
+          });
+      }
+    } else {
+      getLogger().success("Tomcat deploy canceled", true);
+    }
+  }
+
+  /**
+   * Local Deployment Strategy
+   *
+   * Implements direct file synchronization with:
+   * 1. Web application directory validation
+   * 2. Java source compilation
+   * 3. Resource copying
+   * 4. Dependency management
+   * 5. Atomic deployment
+   *
+   * @param projectDir Source project directory
+   * @param targetDir Target deployment directory
+   * @param tomcatHome Tomcat installation directory
+   * @throws Error if build fails or java source compilation fails or if webapp directory not found
+   */
+  private async localDeploy(
+    projectDir: string,
+    targetDir: string,
+    tomcatHome: string,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>,
+  ) {
+    const report = (message: string, increment?: number) => {
+      progress?.report({ message, increment });
+    };
+
+    const structure = this.projectStructure ?? this.detectProjectStructure();
+    const webResourceCandidates = [
+      ...(structure.webResourceRoots || []),
+      path.join("src", "main", "webapp"),
+    ];
+    const webAppPath = this.findFirstExistingPath(
+      projectDir,
+      webResourceCandidates,
+    );
+    if (!webAppPath) {
+      throw new Error(
+        `Web resource directory not found. Checked: ${webResourceCandidates.join(", ")}`,
+      );
+    }
+    const javaHome = await getTomcat().findJavaHome();
+    if (!javaHome) {
+      return;
     }
 
-    /**
-     * Local Deployment Strategy
-     * 
-     * Implements direct file synchronization with:
-     * 1. Web application directory validation
-     * 2. Java source compilation
-     * 3. Resource copying
-     * 4. Dependency management
-     * 5. Atomic deployment
-     * 
-     * @param projectDir Source project directory
-     * @param targetDir Target deployment directory
-     * @param tomcatHome Tomcat installation directory
-     * @throws Error if build fails or java source compilation fails or if webapp directory not found
-     */
-    private async localDeploy(
-        projectDir: string,
-        targetDir: string,
-        tomcatHome: string,
-        progress?: vscode.Progress<{ message?: string; increment?: number }>
-    ) {
-        const report = (message: string, increment?: number) => {
-            progress?.report({ message, increment });
+    report("Validating project layout...", 5);
+
+    const javacPath = path.join(javaHome, "bin", "javac");
+    const classesDir = path.join(targetDir, "WEB-INF", "classes");
+
+    report("Synchronizing web resources...", 25);
+    this.brutalSync(webAppPath, targetDir, true);
+
+    report("Refreshing compiled output...", 10);
+    fs.rmSync(classesDir, { force: true, recursive: true });
+    fs.mkdirSync(classesDir, { recursive: true });
+
+    const javaSourceRoots =
+      structure.javaSourceRoots && structure.javaSourceRoots.length > 0
+        ? structure.javaSourceRoots
+        : [path.join("src", "main", "java")];
+
+    const javaFiles = new Set<string>();
+    for (const sourceRoot of javaSourceRoots) {
+      const sourcePath = this.findFirstExistingPath(projectDir, [sourceRoot]);
+      if (!sourcePath) {
+        continue;
+      }
+      const files = await this.findFiles(path.join(sourcePath, "**", "*.java"));
+      files.forEach((file) => javaFiles.add(file));
+    }
+
+    if (javaFiles.size > 0) {
+      report("Compiling Java sources...", 35);
+      const classpathEntries = new Set<string>();
+      const addClasspathDir = (dir: string) => {
+        try {
+          if (!dir) {
+            return;
+          }
+          if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+            classpathEntries.add(path.join(dir, "*"));
+          }
+        } catch {
+          // ignore inaccessible directories
+        }
+      };
+
+      classpathEntries.add(path.join(tomcatHome, "lib", "*"));
+      addClasspathDir(path.join(projectDir, "lib"));
+
+      if (webAppPath) {
+        addClasspathDir(path.join(webAppPath, "WEB-INF", "lib"));
+      }
+
+      addClasspathDir(path.join(targetDir, "WEB-INF", "lib"));
+
+      const classpath = Array.from(classpathEntries).join(path.delimiter);
+      const compileTargets = Array.from(javaFiles);
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "turbocat-javac-"));
+      const argsFile = path.join(tempDir, "sources.args");
+      const argsFileContent = compileTargets
+        .map((filePath) => `"${filePath.replace(/"/g, '\\"')}"`)
+        .join(os.EOL);
+
+      fs.writeFileSync(argsFile, argsFileContent, "utf8");
+
+      const javacArgs: string[] = [];
+      if (this.compileEncoding) {
+        javacArgs.push("-encoding", this.compileEncoding);
+      }
+      javacArgs.push("-d", classesDir, "-cp", classpath, `@${argsFile}`);
+
+      try {
+        await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } else {
+      report("No Java sources detected, skipping compilation", 35);
+    }
+
+    report("Applying workspace mappings...", 15);
+    await this.applyLocalDeployMappings();
+
+    const libDir = path.join(projectDir, "lib");
+    const targetLib = path.join(targetDir, "WEB-INF", "lib");
+    if (fs.existsSync(libDir)) {
+      report("Updating libraries...", 10);
+      this.brutalSync(libDir, targetLib);
+    } else {
+      report("Library updates skipped", 10);
+    }
+
+    report("Local deployment complete", 0);
+  }
+
+  /**
+   * Apply additional local deploy mappings defined in the workspace configuration.
+   */
+  private async applyLocalDeployMappings(): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return;
+    }
+
+    const tomcatHome = await getTomcat().findTomcatHome();
+    if (!tomcatHome) {
+      return;
+    }
+
+    try {
+      if (!this.smartDeployConfig) {
+        this.smartDeployConfig = await this.loadSmartDeployConfig();
+      }
+
+      if (!this.smartDeployConfig) {
+        return;
+      }
+
+      if (!this.compiledMappings) {
+        this.compiledMappings = this.compileMappings(this.smartDeployConfig);
+      }
+
+      const localMappings = (this.compiledMappings || []).filter(
+        (mapping) => mapping.origin === "local",
+      );
+      if (!localMappings.length) {
+        return;
+      }
+
+      const visitedTargets = new Set<string>();
+
+      for (const mapping of localMappings) {
+        const absolutePattern = path.join(workspaceRoot, mapping.source);
+        const matches = await glob(absolutePattern, {
+          nodir: true,
+          windowsPathsNoEscape: process.platform === "win32",
+        });
+
+        if (!matches.length) {
+          smartLog.debug(
+            `Local deploy mapping "${mapping.source}" did not match any files.`,
+          );
+          continue;
+        }
+
+        for (const sourceFile of matches) {
+          const targetPath = await this.generateDestinationPath(
+            mapping,
+            sourceFile,
+          );
+          if (!targetPath) {
+            continue;
+          }
+
+          let targetKey = targetPath;
+          try {
+            const stats = fs.statSync(sourceFile);
+            targetKey = `${targetPath}|${stats.mtimeMs}`;
+          } catch {
+            // ignore stat errors; still attempt to copy
+          }
+
+          if (!visitedTargets.has(targetKey)) {
+            await this.copyFileWithLogging(sourceFile, targetPath, "local");
+            visitedTargets.add(targetKey);
+          }
+        }
+      }
+    } catch (error) {
+      smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
+    }
+  }
+
+  /**
+   * PreBuilt Maven Deployment — uses pre-compiled target/classes + static web resources.
+   *
+   * Ideal when mvn is not on PATH or JAVA_HOME is not set globally,
+   * because the Java Language Server extension already compiles .java -> .class
+   * into target/classes on every save.
+   */
+  private async mavenPreBuiltDeploy(
+    projectDir: string,
+    targetDir: string,
+    _tomcatHome: string,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>,
+  ) {
+    const report = (message: string, increment?: number) => {
+      progress?.report({ message, increment });
+    };
+
+    if (!fs.existsSync(path.join(projectDir, "pom.xml"))) {
+      throw new Error("pom.xml not found.");
+    }
+
+    report("Validating pre-built output...", 5);
+
+    const classesDir = path.join(projectDir, "target", "classes");
+    if (!fs.existsSync(classesDir)) {
+      throw new Error(
+        "target/classes not found. Build the project with the Java Language Server or run mvn compile first.",
+      );
+    }
+
+    report("Synchronizing web resources...", 20);
+    const structure = this.projectStructure ?? this.detectProjectStructure();
+    const webAppCandidates = [
+      ...(structure.webResourceRoots || []),
+      path.join("src", "main", "webapp"),
+    ];
+    const webAppPath = this.findFirstExistingPath(projectDir, webAppCandidates);
+    if (webAppPath) {
+      this.brutalSync(webAppPath, targetDir, true);
+    }
+
+    report("Copying compiled classes...", 30);
+    const targetClassesDir = path.join(targetDir, "WEB-INF", "classes");
+    if (fs.existsSync(targetClassesDir)) {
+      fs.rmSync(targetClassesDir, { recursive: true, force: true });
+    }
+    this.copyDirectorySync(classesDir, targetClassesDir);
+
+    report("Updating libraries...", 15);
+    const targetLibDir = path.join(targetDir, "WEB-INF", "lib");
+    const depLibDir = path.join(projectDir, "target", "dependency");
+    if (fs.existsSync(depLibDir)) {
+      this.brutalSync(depLibDir, targetLibDir);
+    }
+    const projectLibDir = path.join(projectDir, "lib");
+    if (fs.existsSync(projectLibDir)) {
+      this.brutalSync(projectLibDir, targetLibDir);
+    }
+
+    report("Applying workspace mappings...", 10);
+    await this.applyLocalDeployMappings();
+
+    report("Pre-built deployment complete", 0);
+  }
+
+  /**
+   * Maven Build Strategy
+   *
+   * Implements full Maven lifecycle integration with:
+   * 1. POM validation
+   * 2. Clean package execution
+   * 3. Error analysis
+   * 4. Artifact handling
+   * 5. Deployment synchronization
+   *
+   * @param projectDir Source project directory
+   * @param targetDir Target deployment directory
+   * @throws Error if Maven build fails or artifact not found
+   */
+  private async mavenDeploy(projectDir: string, targetDir: string) {
+    if (!fs.existsSync(path.join(projectDir, "pom.xml"))) {
+      throw new Error("pom.xml not found.");
+    }
+
+    try {
+      // Inject JAVA_HOME from TurboCat config so mvn works even
+      // when the system PATH does not include a JDK.
+      const javaHome = await getTomcat().findJavaHome();
+      const mvnEnv: Record<string, string> = {};
+      if (javaHome && !process.env.JAVA_HOME) {
+        mvnEnv["JAVA_HOME"] = javaHome;
+        getLogger().info(`Using JAVA_HOME=${javaHome} for Maven build`);
+      }
+      await this.executeCommand(
+        `mvn clean package`,
+        projectDir,
+        Object.keys(mvnEnv).length ? mvnEnv : undefined,
+      );
+    } catch (err) {
+      const errorOutput = err?.toString() || "";
+
+      const lines = errorOutput
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes("[ERROR]") &&
+            !line.includes("re-run Maven") &&
+            !line.includes("[Help") &&
+            !line.includes("Re-run Maven") &&
+            !line.includes("For more information") &&
+            !line.includes("http"),
+        )
+        .map((line) => line.replace("[ERROR]", "\t\t"));
+
+      const uniqueLines = [...new Set(lines)];
+
+      throw new Error(uniqueLines.join("\n"));
+    }
+
+    const targetPath = path.join(projectDir, "target");
+    const warFiles = fs
+      .readdirSync(targetPath)
+      .filter((file: string) => file.toLowerCase().endsWith(".war"));
+    if (warFiles.length === 0) {
+      throw new Error("No WAR file found after Maven build.");
+    }
+
+    const warFileName = warFiles[0];
+    const warFilePath = path.join(targetPath, warFileName);
+
+    const warBaseName = path.basename(warFileName, ".war");
+    const warFolderPath = path.join(targetPath, warBaseName);
+
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(`${targetDir}.war`)) {
+      fs.rmSync(`${targetDir}.war`, { force: true });
+    }
+
+    fs.copyFileSync(warFilePath, `${targetDir}.war`);
+
+    if (fs.existsSync(warFolderPath)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      this.copyDirectorySync(warFolderPath, targetDir);
+    }
+  }
+
+  /**
+   * Gradle Build Strategy
+   *
+   * Implements Gradle integration with:
+   * 1. Build script validation
+   * 2. War task execution
+   * 3. Artifact naming control
+   * 4. Deployment synchronization
+   * 5. Cleanup procedures
+   *
+   * @param projectDir Source project directory
+   * @param targetDir Target deployment directory
+   * @param appName Application name for artifact naming
+   * @throws Error if Gradle build fails or artifact not found
+   */
+  private async gradleDeploy(
+    projectDir: string,
+    targetDir: string,
+    appName: string,
+  ) {
+    if (!fs.existsSync(path.join(projectDir, "build.gradle"))) {
+      throw new Error("build.gradle not found.");
+    }
+
+    const gradleCmd =
+      process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+    await this.executeCommand(
+      `${gradleCmd} war -PfinalName=${appName}`,
+      projectDir,
+    );
+
+    const warFile = path.join(projectDir, "build", "libs", `${appName}.war`);
+    if (!fs.existsSync(warFile)) {
+      throw new Error("No WAR file found after Gradle build.");
+    }
+
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.rmSync(`${targetDir}.war`, { recursive: true, force: true });
+    fs.copyFileSync(warFile, `${targetDir}.war`);
+  }
+
+  /**
+   * File System Utility - Pattern Matching
+   *
+   * Implements robust file discovery with:
+   * - Cross-platform path handling
+   * - Absolute path resolution
+   * - Directory exclusion
+   * - Windows path escaping
+   *
+   * @param pattern Glob pattern for file matching
+   * @returns Array of matching file paths
+   * @throws Error if file discovery fails
+   */
+  private async findFiles(pattern: string): Promise<string[]> {
+    return await glob(pattern, {
+      nodir: true,
+      windowsPathsNoEscape: process.platform === "win32",
+      absolute: true,
+    });
+  }
+
+  /**
+   * Command Execution Wrapper
+   *
+   * Provides robust command execution with:
+   * - Working directory control
+   * - Error aggregation
+   * - Promise-based interface
+   * - Output capture
+   *
+   * @param command Command to execute
+   * @param cwd Working directory for execution
+   * @returns Promise resolving on success, rejecting on error
+   * @throws Error if command execution fails
+   */
+  private async executeCommand(
+    command: string,
+    cwd: string,
+    extraEnv?: Record<string, string>,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const options: { cwd: string; env?: Record<string, string> } = { cwd };
+      if (extraEnv) {
+        options.env = {
+          ...(process.env as Record<string, string>),
+          ...extraEnv,
+        };
+      }
+      exec(command, options, (err, stdout, stderr) => {
+        if (err) {
+          reject(stdout || stderr || err.message || "Unknown error.");
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Spawn-based command execution for commands with paths that may contain spaces.
+   * Passes arguments as an array so the shell does not misinterpret whitespace.
+   */
+  private async executeCommandSpawn(
+    command: string,
+    args: string[],
+    cwd: string,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd,
+        stdio: "pipe",
+        shell: false,
+      });
+      let stderr = "";
+      child.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(stderr.trim() || `Command exited with code \${code}`),
+          );
+        }
+      });
+      child.on("error", (err) => {
+        reject(err);
+      });
+    });
+  }
+
+  /**
+   * Resolve the first existing path from the provided candidates.
+   */
+  private findFirstExistingPath(
+    baseDir: string,
+    candidates: string[],
+  ): string | null {
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      const normalized = candidate.replace(/^[/\\]+/, "");
+      const absolutePath = path.isAbsolute(normalized)
+        ? normalized
+        : path.join(baseDir, normalized);
+
+      if (fs.existsSync(absolutePath)) {
+        return absolutePath;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Directory Copy Utility
+   *
+   * Implements recursive directory copy with:
+   * - Recursive structure preservation
+   * - File type handling
+   * - Atomic operations
+   * - Error-tolerant implementation
+   *
+   * @param src Source directory path
+   * @param dest Target directory path
+   * @throws Error if directory copy fails
+   */
+  private copyDirectorySync(src: string, dest: string) {
+    if (!fs.existsSync(dest)) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
+
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+
+      try {
+        fs.rmSync(destPath, { force: true, recursive: true });
+      } catch (e) {
+        smartLog.debug(`Failed to remove ${destPath}: ${e}`);
+      }
+
+      if (entry.isDirectory()) {
+        this.copyDirectorySync(srcPath, destPath);
+      } else {
+        try {
+          fs.copyFileSync(srcPath, destPath);
+        } catch (e) {
+          smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Atomic File Synchronization Utility
+   *
+   * Implements aggressive directory synchronization with:
+   * 1. Delta-based file copying (only changed files)
+   * 2. Clean target directory pruning (removes orphaned files)
+   * 3. Recursive directory handling
+   * 4. Atomic write operations
+   * 5. Error-resilient implementation
+   *
+   * Operation Flow:
+   * 1. Scans source directory to determine required files
+   * 2. Removes any target files not present in source (clean sync)
+   * 3. Creates destination directory structure if missing
+   * 4. Performs file-by-file copy with error recovery
+   *
+   * Special Features:
+   * - Forceful overwrite mode (retries on failure)
+   * - Recursive directory handling
+   * - Minimal filesystem operations
+   * - Cross-platform path handling
+   *
+   * @param src Source directory path (must exist)
+   * @param dest Target directory path (will be created/cleaned)
+   * @throws Error if critical filesystem operations fail
+   */
+  private brutalSync(src: string, dest: string, restricted: boolean = false) {
+    if (fs.existsSync(dest)) {
+      const keepers = new Set(fs.readdirSync(src));
+      const restrictedFolders = ["classes", "lib"];
+      fs.readdirSync(dest).forEach((f) => {
+        const fullPath = path.join(dest, f);
+        if (
+          !keepers.has(f) &&
+          (!restricted ? true : !restrictedFolders.includes(f))
+        ) {
+          try {
+            fs.rmSync(fullPath, { force: true, recursive: true });
+          } catch (e) {
+            smartLog.debug(`Failed to clean ${fullPath}: ${e}`);
+          }
+        }
+      });
+    }
+
+    fs.mkdirSync(dest, { recursive: true });
+    fs.readdirSync(src, { withFileTypes: true }).forEach((entry) => {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+
+      if (entry.isDirectory()) {
+        this.brutalSync(srcPath, destPath, restricted);
+      } else {
+        try {
+          fs.copyFileSync(srcPath, destPath);
+        } catch {
+          fs.rmSync(destPath, { force: true });
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
+    });
+  }
+
+  /**
+   * Enhanced Smart Deploy Configuration Management
+   */
+
+  /**
+   * Load or create smart deploy configuration
+   */
+  private async loadSmartDeployConfig(): Promise<SmartDeployConfig> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      throw new Error("No workspace folder found");
+    }
+
+    const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
+
+    // Priority 1: Try to load from Maven pom.xml if available
+    const mavenParser = new MavenConfigParser(workspaceRoot);
+    if (mavenParser.isProjectSupported()) {
+      try {
+        smartLog.info("Loading smart deploy configuration from Maven pom.xml");
+        const mappings = await mavenParser.parseResourceMappings();
+        const webappConfig = await mavenParser.parseWebappConfiguration();
+        this.defaultSmartDeployWebappName = webappConfig.webappName;
+        const effectiveWebappName = this.resolveWebappName(
+          this.defaultSmartDeployWebappName,
+        );
+
+        const mavenConfig: SmartDeployConfig = {
+          projectType: "maven",
+          webappName: effectiveWebappName,
+          mappings: mappings,
+          settings: {
+            debounceTime: vscode.workspace
+              .getConfiguration("turbocat")
+              .get<number>("smartDeployDebounce", 300),
+            enabled: true,
+            logLevel: "info",
+          },
         };
 
-        const structure = this.projectStructure ?? this.detectProjectStructure();
-        const webResourceCandidates = [
-            ...(structure.webResourceRoots || []),
-            path.join('src', 'main', 'webapp')
-        ];
-        const webAppPath = this.findFirstExistingPath(projectDir, webResourceCandidates);
-        if (!webAppPath) {
-            throw new Error(`Web resource directory not found. Checked: ${webResourceCandidates.join(', ')}`);
-        }
-        const javaHome = await getTomcat().findJavaHome();
-        if (!javaHome) {
-            return;
-        }
-
-        report('Validating project layout...', 5);
-
-        const javacPath = path.join(javaHome, 'bin', 'javac');
-        const classesDir = path.join(targetDir, 'WEB-INF', 'classes');
-    
-        report('Synchronizing web resources...', 25);
-        this.brutalSync(webAppPath, targetDir, true);
-    
-        report('Refreshing compiled output...', 10);
-        fs.rmSync(classesDir, { force: true, recursive: true });
-        fs.mkdirSync(classesDir, { recursive: true });
-    
-        const javaSourceRoots = structure.javaSourceRoots && structure.javaSourceRoots.length > 0
-            ? structure.javaSourceRoots
-            : [path.join('src', 'main', 'java')];
-
-        const javaFiles = new Set<string>();
-        for (const sourceRoot of javaSourceRoots) {
-            const sourcePath = this.findFirstExistingPath(projectDir, [sourceRoot]);
-            if (!sourcePath) {
-                continue;
-            }
-            const files = await this.findFiles(path.join(sourcePath, '**', '*.java'));
-            files.forEach(file => javaFiles.add(file));
-        }
-
-        if (javaFiles.size > 0) {
-            report('Compiling Java sources...', 35);
-            const classpathEntries = new Set<string>();
-            const addClasspathDir = (dir: string) => {
-                try {
-                    if (!dir) {
-                        return;
-                    }
-                    if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-                        classpathEntries.add(path.join(dir, '*'));
-                    }
-                } catch {
-                    // ignore inaccessible directories
-                }
-            };
-
-            classpathEntries.add(path.join(tomcatHome, 'lib', '*'));
-            addClasspathDir(path.join(projectDir, 'lib'));
-
-            if (webAppPath) {
-                addClasspathDir(path.join(webAppPath, 'WEB-INF', 'lib'));
-            }
-
-            addClasspathDir(path.join(targetDir, 'WEB-INF', 'lib'));
-
-            const classpath = Array.from(classpathEntries).join(path.delimiter);
-            const compileTargets = Array.from(javaFiles);
-
-            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-javac-'));
-            const argsFile = path.join(tempDir, 'sources.args');
-            const argsFileContent = compileTargets
-                .map(filePath => `"${filePath.replace(/"/g, '\\"')}"`)
-                .join(os.EOL);
-
-            fs.writeFileSync(argsFile, argsFileContent, 'utf8');
-
-            const javacArgs: string[] = [];
-            if (this.compileEncoding) {
-                javacArgs.push('-encoding', this.compileEncoding);
-            }
-            javacArgs.push('-d', classesDir, '-cp', classpath, `@${argsFile}`);
-
-            try {
-                await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
-            } finally {
-                fs.rmSync(tempDir, { recursive: true, force: true });
-            }
-        } else {
-            report('No Java sources detected, skipping compilation', 35);
-        }
-    
-        report('Applying workspace mappings...', 15);
-        await this.applyLocalDeployMappings();
-    
-        const libDir = path.join(projectDir, 'lib');
-        const targetLib = path.join(targetDir, 'WEB-INF', 'lib');
-        if (fs.existsSync(libDir)) {
-            report('Updating libraries...', 10);
-            this.brutalSync(libDir, targetLib);
-        } else {
-            report('Library updates skipped', 10);
-        }
-
-        report('Local deployment complete', 0);
+        smartLog.info(
+          `Loaded smart deploy configuration from Maven pom.xml: ${mappings.length} mappings`,
+        );
+        return mavenConfig;
+      } catch (error) {
+        smartLog.warn(
+          `Failed to parse Maven configuration, falling back to custom/default config: ${error}`,
+        );
+      }
     }
 
-    /**
-     * Apply additional local deploy mappings defined in the workspace configuration.
-     */
-    private async applyLocalDeployMappings(): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return;
+    // Priority 2: Try to load from custom config file
+    if (fs.existsSync(configPath)) {
+      try {
+        const configContent = fs.readFileSync(configPath, "utf-8");
+        const config = JSON.parse(configContent) as SmartDeployConfig;
+        this.ensureLocalDeployStructure(config);
+        this.defaultSmartDeployWebappName = config.webappName;
+        const resolvedConfig: SmartDeployConfig = {
+          ...config,
+          webappName: this.resolveWebappName(this.defaultSmartDeployWebappName),
+        };
+        smartLog.info(
+          "Loaded smart deploy configuration from custom config file",
+        );
+        return resolvedConfig;
+      } catch (error) {
+        smartLog.warn("Failed to parse smart deploy config, using defaults");
+      }
+    }
+
+    // Priority 3: Create default configuration
+    this.projectStructure = this.detectProjectStructure();
+    this.defaultSmartDeployWebappName = this.projectStructure.defaultWebappName;
+    const defaultConfig: SmartDeployConfig = {
+      projectType: this.projectStructure.type,
+      webappName: this.projectStructure.webappName,
+      mappings:
+        DEFAULT_MAPPINGS[this.projectStructure.type] || DEFAULT_MAPPINGS.plain,
+      settings: {
+        debounceTime: vscode.workspace
+          .getConfiguration("turbocat")
+          .get<number>("smartDeployDebounce", 300),
+        enabled: true,
+        logLevel: "info",
+      },
+    };
+
+    this.ensureLocalDeployStructure(defaultConfig, { injectTemplate: true });
+
+    // Save default configuration
+    await this.saveSmartDeployConfig(defaultConfig);
+    smartLog.info("Created default smart deploy configuration");
+    return defaultConfig;
+  }
+
+  /**
+   * Save smart deploy configuration to file
+   */
+  private async saveSmartDeployConfig(
+    config: SmartDeployConfig,
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return;
+    }
+
+    const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
+    const configDir = path.dirname(configPath);
+
+    // Ensure .vscode directory exists
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    // Write configuration file
+    const configJson = JSON.stringify(config, null, 2);
+    fs.writeFileSync(configPath, configJson, "utf-8");
+  }
+
+  /**
+   * Compile mappings for runtime efficiency with cross-platform support
+   */
+  private compileMappings(config: SmartDeployConfig): CompiledMapping[] {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return [];
+    }
+
+    const combinedMappings = this.buildCombinedMappings(config);
+
+    return combinedMappings.map(({ mapping, origin }) => {
+      const absoluteSource = path.join(workspaceRoot, mapping.source);
+      const absoluteDestination = mapping.destination;
+
+      // Convert glob pattern to regex for file matching with platform-specific logic
+      let regexPattern = this.globToRegex(mapping.source);
+
+      // Anchor the pattern to match from start to end
+      const sourceRegex = new RegExp(`^${regexPattern}$`);
+
+      smartLog.debug(
+        `[${process.platform}] Compiled mapping: "${mapping.source}" -> regex: ${sourceRegex} (origin: ${origin})`,
+      );
+
+      return {
+        ...mapping,
+        absoluteSource,
+        absoluteDestination,
+        sourceRegex,
+        origin,
+      };
+    });
+  }
+
+  /**
+   * Combine smart deploy mappings with local deploy overrides.
+   */
+  private buildCombinedMappings(
+    config: SmartDeployConfig,
+  ): Array<{ mapping: SmartDeployMapping; origin: "smart" | "local" }> {
+    const combined: Array<{
+      mapping: SmartDeployMapping;
+      origin: "smart" | "local";
+    }> = [];
+    const seen = new Set<string>();
+
+    const pushMapping = (
+      mapping: SmartDeployMapping,
+      origin: "smart" | "local",
+    ) => {
+      const key = `${mapping.source}|${mapping.destination}`;
+      if (seen.has(key)) {
+        smartLog.debug(
+          `Skipping duplicate mapping override for ${mapping.source} → ${mapping.destination} (${origin})`,
+        );
+        return;
+      }
+      seen.add(key);
+      combined.push({ mapping, origin });
+    };
+
+    const localMappings = config.localDeploy?.mappings ?? [];
+    localMappings
+      .filter((mapping) => mapping && mapping.enabled !== false)
+      .forEach((mapping) =>
+        pushMapping(this.transformLocalMapping(mapping), "local"),
+      );
+
+    if (Array.isArray(config.mappings)) {
+      config.mappings.forEach((mapping) => pushMapping(mapping, "smart"));
+    }
+
+    return combined;
+  }
+
+  /**
+   * Convert local deploy mapping entries to smart deploy mappings.
+   */
+  private transformLocalMapping(
+    mapping: LocalDeployMapping,
+  ): SmartDeployMapping {
+    const normalizedSource = this.normalizeLocalMappingSource(mapping.source);
+    const normalizedDestination = this.normalizeLocalMappingDestination(
+      mapping.destination,
+    );
+
+    return {
+      source: normalizedSource,
+      destination: normalizedDestination,
+      needsReload: mapping.needsReload ?? false,
+      description:
+        mapping.description ||
+        `Local deploy mapping (${normalizedSource} → ${normalizedDestination})`,
+      extensions: mapping.extensions,
+      excludeExtensions: mapping.excludeExtensions,
+    };
+  }
+
+  private normalizeLocalMappingSource(source: string): string {
+    if (!source) {
+      return "**/*";
+    }
+
+    let normalized = source.replace(/\\/g, "/").replace(/^\/+/, "");
+
+    const hasWildcard = /[*?]/.test(normalized);
+    if (hasWildcard) {
+      return normalized;
+    }
+
+    normalized = normalized.replace(/\/+$/, "");
+    if (!normalized) {
+      return "**/*";
+    }
+
+    const ext = path.extname(normalized);
+    if (ext) {
+      return normalized;
+    }
+
+    return `${normalized}/**/*`;
+  }
+
+  private normalizeLocalMappingDestination(destination: string): string {
+    if (!destination) {
+      return "{relative}";
+    }
+
+    let normalized = destination.replace(/\\/g, "/").replace(/^\/+/, "");
+
+    if (!normalized.includes("{relative}")) {
+      normalized = normalized.replace(/\/+$/, "");
+      normalized = normalized ? `${normalized}/{relative}` : "{relative}";
+    }
+
+    return normalized;
+  }
+
+  private getMappingRoot(sourcePattern: string): string | null {
+    if (!sourcePattern) {
+      return null;
+    }
+
+    const normalized = sourcePattern.replace(/\\/g, "/").replace(/^\/+/, "");
+    const wildcardIndex = normalized.search(/[*?]/);
+    if (wildcardIndex >= 0) {
+      return normalized.substring(0, wildcardIndex).replace(/\/+$/, "") || null;
+    }
+
+    return normalized.replace(/\/+$/, "") || null;
+  }
+
+  private resolveCompiledOutputDirectories(): string[] {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return [];
+    }
+
+    if (
+      (!this.compiledMappings || !this.compiledMappings.length) &&
+      this.smartDeployConfig
+    ) {
+      this.compiledMappings = this.compileMappings(this.smartDeployConfig);
+    }
+
+    const outputs = new Set<string>();
+
+    if (this.compiledMappings) {
+      for (const mapping of this.compiledMappings) {
+        const isClassMapping =
+          (mapping.extensions && mapping.extensions.includes(".class")) ||
+          mapping.source.toLowerCase().includes(".class");
+
+        if (!isClassMapping) {
+          continue;
         }
 
-        const tomcatHome = await getTomcat().findTomcatHome();
-        if (!tomcatHome) {
-            return;
+        const root = this.getMappingRoot(mapping.source);
+        if (root) {
+          outputs.add(path.join(workspaceRoot, root));
+        }
+      }
+    }
+
+    if (!outputs.size) {
+      switch (this.projectStructure?.type) {
+        case "maven":
+          outputs.add(path.join(workspaceRoot, "target/classes"));
+          break;
+        case "gradle":
+          outputs.add(path.join(workspaceRoot, "build/classes/java/main"));
+          break;
+        default:
+          outputs.add(path.join(workspaceRoot, "bin"));
+          break;
+      }
+    }
+
+    return Array.from(outputs);
+  }
+
+  private ensureLocalDeployStructure(
+    config: SmartDeployConfig,
+    options?: { injectTemplate?: boolean },
+  ): void {
+    if (!config.localDeploy || !Array.isArray(config.localDeploy.mappings)) {
+      config.localDeploy = { mappings: [] };
+    }
+
+    const shouldInjectTemplate =
+      options?.injectTemplate &&
+      ["plain", "eclipse"].includes(config.projectType) &&
+      config.localDeploy.mappings.length === 0;
+
+    if (shouldInjectTemplate) {
+      config.localDeploy.mappings.push({
+        description: "Example: copy conf directory into WEB-INF/classes/conf",
+        source: "conf",
+        destination: "WEB-INF/classes/conf",
+        enabled: false,
+        needsReload: false,
+      });
+    }
+  }
+
+  /**
+   * Convert glob pattern to regex with proper cross-platform support
+   */
+  private globToRegex(globPattern: string): string {
+    // Platform-specific path separator handling
+    const isWindows = process.platform === "win32";
+    const pathSeparator = isWindows ? "\\\\" : "/";
+    const pathSeparatorClass = isWindows ? "[\\\\\\/]" : "\\/";
+
+    smartLog.debug(`[${process.platform}] Converting glob: "${globPattern}"`);
+
+    let regexPattern = globPattern
+      // First, handle glob patterns by replacing with placeholders
+      .replace(/\*\*/g, "__DOUBLESTAR__")
+      .replace(/\*/g, "__SINGLESTAR__")
+      .replace(/\?/g, "__QUESTION__")
+      // Escape regex special characters
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      // Make **/<filename> match files at root level (zero directories)
+      .replace(
+        /__DOUBLESTAR__\/__SINGLESTAR__/g,
+        "(__DOUBLESTAR__/)?__SINGLESTAR__",
+      )
+      // Convert glob placeholders to regex patterns
+      .replace(/__DOUBLESTAR__/g, ".*") // ** -> match any characters including path separators
+      .replace(/__SINGLESTAR__/g, `[^${pathSeparator}]*`) // * -> match any characters except path separators
+      .replace(/__QUESTION__/g, `[^${pathSeparator}]`); // ? -> match single character except path separators
+
+    // Convert forward slashes to platform-specific path separator pattern
+    regexPattern = regexPattern.replace(/\//g, pathSeparatorClass);
+
+    smartLog.debug(`[${process.platform}] Regex result: "${regexPattern}"`);
+
+    return regexPattern;
+  }
+
+  /**
+   * Check if a file matches any compiled mapping with enhanced debugging
+   */
+  private findMatchingMapping(filePath: string): CompiledMapping | null {
+    if (!this.compiledMappings) {
+      return null;
+    }
+
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return null;
+    }
+
+    // Normalize paths for cross-platform compatibility
+    const relativePath = path
+      .relative(workspaceRoot, filePath)
+      .replace(/\\/g, "/");
+
+    for (const mapping of this.compiledMappings) {
+      const regexMatch = mapping.sourceRegex.test(relativePath);
+
+      if (regexMatch) {
+        const ext = path.extname(filePath).toLowerCase();
+
+        if (mapping.extensions) {
+          if (!mapping.extensions.includes(ext)) {
+            continue;
+          }
         }
 
+        if (mapping.excludeExtensions) {
+          if (mapping.excludeExtensions.includes(ext)) {
+            continue;
+          }
+        }
+
+        smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
+        return mapping;
+      }
+    }
+
+    smartLog.debug(`No mapping for: ${relativePath}`);
+    return null;
+  }
+
+  /**
+   * Generate destination path from mapping and source file with proper relative path handling
+   */
+  private async generateDestinationPath(
+    mapping: CompiledMapping,
+    sourceFile: string,
+    options: { ensureParent?: boolean } = {},
+  ): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return "";
+    }
+
+    const webappsRoot = await getTomcat().getWebappsRoot();
+    if (!webappsRoot) {
+      return "";
+    }
+
+    // Get the webapp directory
+    const webappDir = path.join(
+      webappsRoot,
+      this.projectStructure?.webappName || "",
+    );
+
+    // Get relative path from workspace
+    const relativePath = path.relative(workspaceRoot, sourceFile);
+
+    // Extract the correct relative portion based on the mapping source pattern
+    const relativePortion = this.extractRelativePortionFromMapping(
+      mapping,
+      relativePath,
+      sourceFile,
+    );
+
+    // Replace {relative} placeholder with actual relative path
+    let destinationPath = mapping.destination;
+    if (destinationPath.includes("{relative}")) {
+      destinationPath = destinationPath.replace("{relative}", relativePortion);
+    } else {
+      // If no placeholder, ensure destination includes the relative path
+      destinationPath = path.join(destinationPath, relativePortion);
+    }
+
+    // Create full destination path
+    const fullDestinationPath = path.join(webappDir, destinationPath);
+
+    if (options.ensureParent !== false) {
+      const targetDir = path.dirname(fullDestinationPath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+    }
+
+    smartLog.debug(`Path mapping: ${relativePath} → ${destinationPath}`);
+    return fullDestinationPath;
+  }
+
+  /**
+   * Extract the correct relative portion from mapping pattern with enhanced cross-platform support
+   */
+  private extractRelativePortionFromMapping(
+    mapping: CompiledMapping,
+    relativePath: string,
+    sourceFile: string,
+  ): string {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      return path.basename(sourceFile);
+    }
+
+    // Normalize all paths to use forward slashes for consistent processing
+    const sourcePattern = this.normalizePath(mapping.source);
+    const normalizedRelativePath = this.normalizePath(relativePath);
+
+    smartLog.debug(
+      `[${process.platform}] Extracting relative portion for pattern: ${sourcePattern}`,
+    );
+    smartLog.debug(
+      `[${process.platform}] File relative path: ${normalizedRelativePath}`,
+    );
+
+    // Handle different pattern types with enhanced cross-platform logic
+    if (sourcePattern.includes("**/*")) {
+      // Pattern like 'target/classes/**/*.class'
+      const basePath = sourcePattern.split("/**")[0]; // Get 'target/classes'
+
+      // Use more robust path matching
+      if (this.pathStartsWith(normalizedRelativePath, basePath)) {
+        const afterBasePath = normalizedRelativePath
+          .substring(basePath.length)
+          .replace(/^\/+/, "");
+        smartLog.debug(
+          `[${process.platform}] Extracted relative portion: ${afterBasePath}`,
+        );
+        return afterBasePath;
+      }
+    } else if (sourcePattern.includes("**/")) {
+      // Pattern like 'src/**/filename'
+      const parts = sourcePattern.split("**/");
+      if (parts.length >= 2) {
+        const basePath = parts[0].replace(/\/+$/, ""); // Remove trailing slashes
+        if (this.pathStartsWith(normalizedRelativePath, basePath)) {
+          const afterBasePath = normalizedRelativePath
+            .substring(basePath.length)
+            .replace(/^\/+/, "");
+          smartLog.debug(
+            `[${process.platform}] Extracted relative portion (recursive): ${afterBasePath}`,
+          );
+          return afterBasePath;
+        }
+      }
+    } else if (sourcePattern.includes("*")) {
+      // Simple wildcard pattern - use cross-platform path.dirname
+      const basePath = this.normalizePath(path.dirname(sourcePattern));
+      if (
+        basePath !== "." &&
+        this.pathStartsWith(normalizedRelativePath, basePath)
+      ) {
+        const afterBasePath = normalizedRelativePath
+          .substring(basePath.length)
+          .replace(/^\/+/, "");
+        smartLog.debug(
+          `[${process.platform}] Extracted relative portion (wildcard): ${afterBasePath}`,
+        );
+        return afterBasePath;
+      }
+    }
+
+    // Fallback: for class files, try to preserve package structure
+    if (sourceFile.endsWith(".class")) {
+      return this.extractClassRelativePath(sourceFile, normalizedRelativePath);
+    }
+
+    // Default fallback
+    smartLog.debug(
+      `[${process.platform}] Using basename fallback: ${path.basename(sourceFile)}`,
+    );
+    return path.basename(sourceFile);
+  }
+
+  /**
+   * Normalize path separators for cross-platform consistency
+   */
+  private normalizePath(inputPath: string): string {
+    return inputPath.replace(/\\/g, "/");
+  }
+
+  /**
+   * Check if a path starts with a given prefix, handling edge cases
+   */
+  private pathStartsWith(fullPath: string, prefix: string): boolean {
+    if (!prefix || prefix === ".") {
+      return true;
+    }
+
+    const normalizedPrefix = prefix.replace(/\/+$/, ""); // Remove trailing slashes
+    return (
+      fullPath === normalizedPrefix ||
+      fullPath.startsWith(normalizedPrefix + "/")
+    );
+  }
+
+  /**
+   * Extract relative path for class files preserving package structure with cross-platform support
+   */
+  private extractClassRelativePath(
+    sourceFile: string,
+    relativePath: string,
+  ): string {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot || !this.projectStructure) {
+      return path.basename(sourceFile);
+    }
+
+    // Determine the output directory based on project type
+    let outputPattern: string;
+    switch (this.projectStructure.type) {
+      case "maven":
+        outputPattern = "target/classes";
+        break;
+      case "gradle":
+        outputPattern = "build/classes/java/main";
+        break;
+      default:
+        outputPattern = "bin";
+        break;
+    }
+
+    // Normalize paths for cross-platform consistency
+    const normalizedOutputPattern = this.normalizePath(outputPattern);
+    const normalizedRelativePath = this.normalizePath(relativePath);
+
+    smartLog.debug(
+      `[${process.platform}] Class path extraction - Output pattern: ${normalizedOutputPattern}`,
+    );
+    smartLog.debug(
+      `[${process.platform}] Class path extraction - Relative path: ${normalizedRelativePath}`,
+    );
+
+    // If the file is in the output directory, extract the package path
+    if (this.pathStartsWith(normalizedRelativePath, normalizedOutputPattern)) {
+      const packagePath = normalizedRelativePath
+        .substring(normalizedOutputPattern.length)
+        .replace(/^\/+/, "");
+      smartLog.debug(
+        `[${process.platform}] Extracted class package path: ${packagePath}`,
+      );
+      return packagePath;
+    }
+
+    // Fallback to basename
+    smartLog.debug(
+      `[${process.platform}] Class path extraction fallback to basename: ${path.basename(sourceFile)}`,
+    );
+    return path.basename(sourceFile);
+  }
+
+  /**
+   * Debug method: Print current smart deployment status and configuration
+   */
+  public async debugSmartDeploymentStatus(): Promise<void> {
+    smartLog.info("🔍 === Smart Deployment Debug Status ===");
+
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      smartLog.warn("❌ No workspace root found");
+      return;
+    }
+
+    smartLog.info(`📁 Workspace Root: ${workspaceRoot}`);
+    smartLog.info(`🎯 Auto Deploy Mode: ${this.autoDeployMode}`);
+    smartLog.info(`🔧 Is Deploying: ${this.isDeploying}`);
+    smartLog.info(`📊 File Watchers Active: ${this.fileWatchers.length}`);
+
+    // Project Structure
+    if (this.projectStructure) {
+      smartLog.info(`🏗️ Project Structure:`);
+      smartLog.info(`   - Type: ${this.projectStructure.type}`);
+      smartLog.info(`   - WebappName: ${this.projectStructure.webappName}`);
+    } else {
+      smartLog.warn("⚠️ Project structure not detected");
+    }
+
+    // Smart Deploy Configuration
+    if (this.smartDeployConfig) {
+      smartLog.info(`⚙️ Smart Deploy Config:`);
+      smartLog.info(`   - Project Type: ${this.smartDeployConfig.projectType}`);
+      smartLog.info(`   - Webapp Name: ${this.smartDeployConfig.webappName}`);
+      smartLog.info(
+        `   - Mappings: ${this.smartDeployConfig.mappings.length} rules`,
+      );
+      smartLog.info(
+        `   - Debounce Time: ${this.smartDeployConfig.settings.debounceTime}ms`,
+      );
+      smartLog.info(`   - Enabled: ${this.smartDeployConfig.settings.enabled}`);
+
+      // List all mappings
+      this.smartDeployConfig.mappings.forEach((mapping, index) => {
+        smartLog.info(
+          `     Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`,
+        );
+      });
+    } else {
+      smartLog.warn("⚠️ Smart deploy configuration not loaded");
+    }
+
+    // File Watcher Details
+    smartLog.info(`👀 Active File Watchers:`);
+    this.fileWatchers.forEach((_, index) => {
+      smartLog.info(`   Watcher ${index + 1}: Active`);
+    });
+
+    // Batch Processing Status
+    smartLog.info(`📦 Batch Processing Status:`);
+    smartLog.info(
+      `   - Pending Compiled Files: ${this.pendingCompiledFiles.size}`,
+    );
+    smartLog.info(
+      `   - Batch Timer Active: ${this.batchDeploymentTimer ? "Yes" : "No"}`,
+    );
+
+    if (this.pendingCompiledFiles.size > 0) {
+      smartLog.info(`   - Pending Files:`);
+      Array.from(this.pendingCompiledFiles).forEach((file, index) => {
+        const fileInfo = JSON.parse(file);
+        smartLog.info(
+          `     ${index + 1}. ${path.basename(fileInfo.filePath)} (${fileInfo.eventType})`,
+        );
+      });
+    }
+
+    // Maven Configuration Check
+    const mavenParser = new MavenConfigParser(workspaceRoot);
+    if (mavenParser.isProjectSupported()) {
+      smartLog.info(`🎯 Maven Project Detected - running Maven debug...`);
+      await mavenParser.debugMavenConfiguration();
+    } else {
+      smartLog.info(`📄 Maven pom.xml not found in workspace root`);
+    }
+
+    smartLog.info("🔍 === End Smart Deployment Debug Status ===");
+  }
+
+  /**
+   * Debug method: Test compiled file watcher manually
+   */
+  public async testCompiledFileWatcher(): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      smartLog.warn("❌ No workspace root found");
+      return;
+    }
+
+    if (!this.projectStructure) {
+      smartLog.warn("⚠️ Project structure not detected, detecting now...");
+      this.projectStructure = this.detectProjectStructure();
+    }
+
+    smartLog.info("🧪 === Testing Compiled File Watcher ===");
+
+    // Check output directories based on project type
+    let outputDirs: string[] = [];
+    switch (this.projectStructure.type) {
+      case "maven":
+        outputDirs = ["target/classes", "target/test-classes"];
+        break;
+      case "gradle":
+        outputDirs = ["build/classes/java/main", "build/classes/java/test"];
+        break;
+      case "eclipse":
+      case "plain":
+      default:
+        outputDirs = ["bin", "out"];
+        break;
+    }
+
+    for (const outputDir of outputDirs) {
+      const fullOutputPath = path.join(workspaceRoot, outputDir);
+      const exists = fs.existsSync(fullOutputPath);
+      smartLog.info(
+        `📁 Output Directory: ${outputDir} - ${exists ? "✅ EXISTS" : "❌ NOT FOUND"}`,
+      );
+
+      if (exists) {
+        // Look for .class files
         try {
-            if (!this.smartDeployConfig) {
-                this.smartDeployConfig = await this.loadSmartDeployConfig();
+          const classFiles = await glob(`${fullOutputPath}/**/*.class`);
+          smartLog.info(`   - Found ${classFiles.length} .class files`);
+
+          if (classFiles.length > 0) {
+            classFiles.slice(0, 5).forEach((file) => {
+              const relativePath = path.relative(workspaceRoot, file);
+              smartLog.info(`     - ${relativePath}`);
+            });
+            if (classFiles.length > 5) {
+              smartLog.info(
+                `     - ... and ${classFiles.length - 5} more files`,
+              );
             }
-
-            if (!this.smartDeployConfig) {
-                return;
-            }
-
-            if (!this.compiledMappings) {
-                this.compiledMappings = this.compileMappings(this.smartDeployConfig);
-            }
-
-            const localMappings = (this.compiledMappings || []).filter(mapping => mapping.origin === 'local');
-            if (!localMappings.length) {
-                return;
-            }
-
-            const visitedTargets = new Set<string>();
-
-            for (const mapping of localMappings) {
-                const absolutePattern = path.join(workspaceRoot, mapping.source);
-                const matches = await glob(absolutePattern, {
-                    nodir: true,
-                    windowsPathsNoEscape: process.platform === 'win32'
-                });
-
-                if (!matches.length) {
-                    smartLog.debug(`Local deploy mapping "${mapping.source}" did not match any files.`);
-                    continue;
-                }
-
-                for (const sourceFile of matches) {
-                    const targetPath = await this.generateDestinationPath(mapping, sourceFile);
-                    if (!targetPath) {
-                        continue;
-                    }
-
-                    let targetKey = targetPath;
-                    try {
-                        const stats = fs.statSync(sourceFile);
-                        targetKey = `${targetPath}|${stats.mtimeMs}`;
-                    } catch {
-                        // ignore stat errors; still attempt to copy
-                    }
-
-                    if (!visitedTargets.has(targetKey)) {
-                        await this.copyFileWithLogging(sourceFile, targetPath, 'local');
-                        visitedTargets.add(targetKey);
-                    }
-                }
-            }
+          }
         } catch (error) {
-            smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
+          smartLog.warn(`   - Error scanning for .class files: ${error}`);
         }
+      }
     }
 
-    /**
-     * PreBuilt Maven Deployment — uses pre-compiled target/classes + static web resources.
-     *
-     * Ideal when mvn is not on PATH or JAVA_HOME is not set globally,
-     * because the Java Language Server extension already compiles .java -> .class
-     * into target/classes on every save.
-     */
-    private async mavenPreBuiltDeploy(
-        projectDir: string,
-        targetDir: string,
-        _tomcatHome: string,
-        progress?: vscode.Progress<{ message?: string; increment?: number }>
-    ) {
-        const report = (message: string, increment?: number) => {
-            progress?.report({ message, increment });
-        };
-
-        if (!fs.existsSync(path.join(projectDir, 'pom.xml'))) {
-            throw new Error('pom.xml not found.');
-        }
-
-        report('Validating pre-built output...', 5);
-
-        const classesDir = path.join(projectDir, 'target', 'classes');
-        if (!fs.existsSync(classesDir)) {
-            throw new Error(
-                'target/classes not found. Build the project with the Java Language Server or run mvn compile first.'
-            );
-        }
-
-        report('Synchronizing web resources...', 20);
-        const structure = this.projectStructure ?? this.detectProjectStructure();
-        const webAppCandidates = [
-            ...(structure.webResourceRoots || []),
-            path.join('src', 'main', 'webapp')
-        ];
-        const webAppPath = this.findFirstExistingPath(projectDir, webAppCandidates);
-        if (webAppPath) {
-            this.brutalSync(webAppPath, targetDir, true);
-        }
-
-        report('Copying compiled classes...', 30);
-        const targetClassesDir = path.join(targetDir, 'WEB-INF', 'classes');
-        if (fs.existsSync(targetClassesDir)) {
-            fs.rmSync(targetClassesDir, { recursive: true, force: true });
-        }
-        this.copyDirectorySync(classesDir, targetClassesDir);
-
-        report('Synchronizing resources...', 15);
-        const resourceCandidates = ['src/main/resources'];
-        const resourcesPath = this.findFirstExistingPath(projectDir, resourceCandidates);
-        if (resourcesPath) {
-            this.brutalSync(resourcesPath, targetClassesDir);
-        }
-
-        report('Updating libraries...', 15);
-        const targetLibDir = path.join(targetDir, 'WEB-INF', 'lib');
-        const depLibDir = path.join(projectDir, 'target', 'dependency');
-        if (fs.existsSync(depLibDir)) {
-            this.brutalSync(depLibDir, targetLibDir);
-        }
-        const projectLibDir = path.join(projectDir, 'lib');
-        if (fs.existsSync(projectLibDir)) {
-            this.brutalSync(projectLibDir, targetLibDir);
-        }
-
-        report('Applying workspace mappings...', 10);
-        await this.applyLocalDeployMappings();
-
-        report('Pre-built deployment complete', 0);
-    }
-
-    /**
-     * Maven Build Strategy
-     * 
-     * Implements full Maven lifecycle integration with:
-     * 1. POM validation
-     * 2. Clean package execution
-     * 3. Error analysis
-     * 4. Artifact handling
-     * 5. Deployment synchronization
-     * 
-     * @param projectDir Source project directory
-     * @param targetDir Target deployment directory
-     * @throws Error if Maven build fails or artifact not found
-     */
-    private async mavenDeploy(projectDir: string, targetDir: string) {
-        if (!fs.existsSync(path.join(projectDir, 'pom.xml'))) {
-            throw new Error('pom.xml not found.');
-        }
-
-        try {
-            await this.executeCommand(`mvn clean package`, projectDir);
-        } catch (err) {
-            const errorOutput = err?.toString() || '';
-        
-            const lines = errorOutput
-                .split('\n')
-                .filter(line =>
-                    line.includes('[ERROR]') &&
-                    !line.includes('re-run Maven') &&
-                    !line.includes('[Help') &&
-                    !line.includes('Re-run Maven') &&
-                    !line.includes('For more information') &&
-                    !line.includes('http')
-                )
-                .map(line => line.replace('[ERROR]', '\t\t'));
-        
-            const uniqueLines = [...new Set(lines)];
-                
-            throw new Error(uniqueLines.join('\n'));
-        }
-
-        const targetPath = path.join(projectDir, 'target');
-        const warFiles = fs.readdirSync(targetPath).filter((file: string) => file.toLowerCase().endsWith('.war'));
-        if (warFiles.length === 0) {
-            throw new Error('No WAR file found after Maven build.');
-        }
-
-        const warFileName = warFiles[0];
-        const warFilePath = path.join(targetPath, warFileName);
-
-        const warBaseName = path.basename(warFileName, '.war');
-        const warFolderPath = path.join(targetPath, warBaseName);
-
-        if (fs.existsSync(targetDir)) {
-            fs.rmSync(targetDir, { recursive: true, force: true });
-        }
-        if (fs.existsSync(`${targetDir}.war`)) {
-            fs.rmSync(`${targetDir}.war`, { force: true });
-        }
-
-        fs.copyFileSync(warFilePath, `${targetDir}.war`);
-
-        if (fs.existsSync(warFolderPath)) {
-            fs.mkdirSync(targetDir, { recursive: true });
-            this.copyDirectorySync(warFolderPath, targetDir);
-        }
-    }
-
-    /**
-     * Gradle Build Strategy
-     * 
-     * Implements Gradle integration with:
-     * 1. Build script validation
-     * 2. War task execution
-     * 3. Artifact naming control
-     * 4. Deployment synchronization
-     * 5. Cleanup procedures
-     * 
-     * @param projectDir Source project directory
-     * @param targetDir Target deployment directory
-     * @param appName Application name for artifact naming
-     * @throws Error if Gradle build fails or artifact not found
-     */
-    private async gradleDeploy(projectDir: string, targetDir: string, appName: string) {
-        if (!fs.existsSync(path.join(projectDir, 'build.gradle'))) {
-            throw new Error('build.gradle not found.');
-        }
-
-        const gradleCmd = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
-        await this.executeCommand(`${gradleCmd} war -PfinalName=${appName}`, projectDir);
-
-        const warFile = path.join(projectDir, 'build', 'libs', `${appName}.war`);
-        if (!fs.existsSync(warFile)) {
-            throw new Error('No WAR file found after Gradle build.');
-        }
-
-        fs.rmSync(targetDir, { recursive: true, force: true });
-        fs.rmSync(`${targetDir}.war`, { recursive: true, force: true });
-        fs.copyFileSync(warFile, `${targetDir}.war`);
-    }
-
-    /**
-     * File System Utility - Pattern Matching
-     * 
-     * Implements robust file discovery with:
-     * - Cross-platform path handling
-     * - Absolute path resolution
-     * - Directory exclusion
-     * - Windows path escaping
-     * 
-     * @param pattern Glob pattern for file matching
-     * @returns Array of matching file paths
-     * @throws Error if file discovery fails
-     */
-    private async findFiles(pattern: string): Promise<string[]> {
-        return await glob(pattern, {
-            nodir: true,
-            windowsPathsNoEscape: process.platform === 'win32',
-            absolute: true,
-        });
-    }
-
-    /**
-     * Command Execution Wrapper
-     * 
-     * Provides robust command execution with:
-     * - Working directory control
-     * - Error aggregation
-     * - Promise-based interface
-     * - Output capture
-     * 
-     * @param command Command to execute
-     * @param cwd Working directory for execution
-     * @returns Promise resolving on success, rejecting on error
-     * @throws Error if command execution fails
-     */
-    private async executeCommand(command: string, cwd: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            exec(command, { cwd }, (err, stdout, stderr) => {
-                if (err) {
-                    reject(stdout || stderr || err.message || 'Unknown error.');
-                    return;
-                }
-                resolve();
-            });
-        });
-    }
-
-    /**
-     * Spawn-based command execution for commands with paths that may contain spaces.
-     * Passes arguments as an array so the shell does not misinterpret whitespace.
-     */
-    private async executeCommandSpawn(command: string, args: string[], cwd: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            const child = spawn(command, args, {
-                cwd,
-                stdio: 'pipe',
-                shell: false
-            });
-            let stderr = '';
-            child.stderr.on('data', (data) => { stderr += data.toString(); });
-            child.on('close', (code) => {
-                if (code === 0) {
-                    resolve();
-                } else {
-                    reject(new Error(stderr.trim() || `Command exited with code \${code}`));
-                }
-            });
-            child.on('error', (err) => {
-                reject(err);
-            });
-        });
-    }
-
-    /**
-     * Resolve the first existing path from the provided candidates.
-     */
-    private findFirstExistingPath(baseDir: string, candidates: string[]): string | null {
-        for (const candidate of candidates) {
-            if (!candidate) {
-                continue;
-            }
-
-            const normalized = candidate.replace(/^[/\\]+/, '');
-            const absolutePath = path.isAbsolute(normalized)
-                ? normalized
-                : path.join(baseDir, normalized);
-
-            if (fs.existsSync(absolutePath)) {
-                return absolutePath;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Directory Copy Utility
-     * 
-     * Implements recursive directory copy with:
-     * - Recursive structure preservation
-     * - File type handling
-     * - Atomic operations
-     * - Error-tolerant implementation
-     * 
-     * @param src Source directory path
-     * @param dest Target directory path
-     * @throws Error if directory copy fails
-     */
-    private copyDirectorySync(src: string, dest: string) {
-        if (!fs.existsSync(dest)) {
-            fs.mkdirSync(dest, { recursive: true });
-        }
-    
-        const entries = fs.readdirSync(src, { withFileTypes: true });
-    
-        for (const entry of entries) {
-            const srcPath = path.join(src, entry.name);
-            const destPath = path.join(dest, entry.name);
-    
-            try {
-                fs.rmSync(destPath, { force: true, recursive: true });
-            } catch (e) {
-                smartLog.debug(`Failed to remove ${destPath}: ${e}`);
-            }
-    
-            if (entry.isDirectory()) {
-                this.copyDirectorySync(srcPath, destPath);
-            } else {
-                try {
-                    fs.copyFileSync(srcPath, destPath);
-                } catch (e) {
-                    smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
-                }
-            }
-        }
-    }
-
-    /**
-     * Atomic File Synchronization Utility
-     * 
-     * Implements aggressive directory synchronization with:
-     * 1. Delta-based file copying (only changed files)
-     * 2. Clean target directory pruning (removes orphaned files)
-     * 3. Recursive directory handling
-     * 4. Atomic write operations
-     * 5. Error-resilient implementation
-     * 
-     * Operation Flow:
-     * 1. Scans source directory to determine required files
-     * 2. Removes any target files not present in source (clean sync)
-     * 3. Creates destination directory structure if missing
-     * 4. Performs file-by-file copy with error recovery
-     * 
-     * Special Features:
-     * - Forceful overwrite mode (retries on failure)
-     * - Recursive directory handling
-     * - Minimal filesystem operations
-     * - Cross-platform path handling
-     * 
-     * @param src Source directory path (must exist)
-     * @param dest Target directory path (will be created/cleaned)
-     * @throws Error if critical filesystem operations fail
-     */
-    private brutalSync(src: string, dest: string, restricted: boolean = false) {
-        if (fs.existsSync(dest)) {
-            const keepers = new Set(fs.readdirSync(src));
-            const restrictedFolders = [
-                'classes',
-                'lib'
-            ];
-            fs.readdirSync(dest).forEach(f => {
-                const fullPath = path.join(dest, f);
-                if (!keepers.has(f) && (!restricted ? true : !restrictedFolders.includes(f))) {
-                    try {
-                        fs.rmSync(fullPath, { force: true, recursive: true });
-                    } catch (e) {
-                        smartLog.debug(`Failed to clean ${fullPath}: ${e}`);
-                    }
-                }
-            });
-        }
-    
-        fs.mkdirSync(dest, { recursive: true });
-        fs.readdirSync(src, { withFileTypes: true }).forEach(entry => {
-            const srcPath = path.join(src, entry.name);
-            const destPath = path.join(dest, entry.name);
-            
-            if (entry.isDirectory()) {
-                this.brutalSync(srcPath, destPath, restricted);
-            } else {
-                try {
-                    fs.copyFileSync(srcPath, destPath);
-                } catch {
-                    fs.rmSync(destPath, { force: true });
-                    fs.copyFileSync(srcPath, destPath);
-                }
-            }
-        });
-    }
-
-    /**
-     * Enhanced Smart Deploy Configuration Management
-     */
-
-    /**
-     * Load or create smart deploy configuration
-     */
-    private async loadSmartDeployConfig(): Promise<SmartDeployConfig> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            throw new Error('No workspace folder found');
-        }
-
-        const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
-        
-        // Priority 1: Try to load from Maven pom.xml if available
-        const mavenParser = new MavenConfigParser(workspaceRoot);
-        if (mavenParser.isProjectSupported()) {
-            try {
-                smartLog.info('Loading smart deploy configuration from Maven pom.xml');
-                const mappings = await mavenParser.parseResourceMappings();
-                const webappConfig = await mavenParser.parseWebappConfiguration();
-                this.defaultSmartDeployWebappName = webappConfig.webappName;
-                const effectiveWebappName = this.resolveWebappName(this.defaultSmartDeployWebappName);
-                
-                const mavenConfig: SmartDeployConfig = {
-                    projectType: 'maven',
-                    webappName: effectiveWebappName,
-                    mappings: mappings,
-                    settings: {
-                        debounceTime: vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300),
-                        enabled: true,
-                        logLevel: 'info'
-                    }
-                };
-
-                smartLog.info(`Loaded smart deploy configuration from Maven pom.xml: ${mappings.length} mappings`);
-                return mavenConfig;
-            } catch (error) {
-                smartLog.warn(`Failed to parse Maven configuration, falling back to custom/default config: ${error}`);
-            }
-        }
-
-        // Priority 2: Try to load from custom config file
-        if (fs.existsSync(configPath)) {
-            try {
-                const configContent = fs.readFileSync(configPath, 'utf-8');
-                const config = JSON.parse(configContent) as SmartDeployConfig;
-                this.ensureLocalDeployStructure(config);
-                this.defaultSmartDeployWebappName = config.webappName;
-                const resolvedConfig: SmartDeployConfig = {
-                    ...config,
-                    webappName: this.resolveWebappName(this.defaultSmartDeployWebappName)
-                };
-                smartLog.info('Loaded smart deploy configuration from custom config file');
-                return resolvedConfig;
-            } catch (error) {
-                smartLog.warn('Failed to parse smart deploy config, using defaults');
-            }
-        }
-
-        // Priority 3: Create default configuration
-        this.projectStructure = this.detectProjectStructure();
-        this.defaultSmartDeployWebappName = this.projectStructure.defaultWebappName;
-        const defaultConfig: SmartDeployConfig = {
-            projectType: this.projectStructure.type,
-            webappName: this.projectStructure.webappName,
-            mappings: DEFAULT_MAPPINGS[this.projectStructure.type] || DEFAULT_MAPPINGS.plain,
-            settings: {
-                debounceTime: vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300),
-                enabled: true,
-                logLevel: 'info'
-            }
-        };
-
-        this.ensureLocalDeployStructure(defaultConfig, { injectTemplate: true });
-
-        // Save default configuration
-        await this.saveSmartDeployConfig(defaultConfig);
-        smartLog.info('Created default smart deploy configuration');
-        return defaultConfig;
-    }
-
-    /**
-     * Save smart deploy configuration to file
-     */
-    private async saveSmartDeployConfig(config: SmartDeployConfig): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return;
-        }
-
-        const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
-        const configDir = path.dirname(configPath);
-        
-        // Ensure .vscode directory exists
-        if (!fs.existsSync(configDir)) {
-            fs.mkdirSync(configDir, { recursive: true });
-        }
-
-        // Write configuration file
-        const configJson = JSON.stringify(config, null, 2);
-        fs.writeFileSync(configPath, configJson, 'utf-8');
-    }
-
-    /**
-     * Compile mappings for runtime efficiency with cross-platform support
-     */
-    private compileMappings(config: SmartDeployConfig): CompiledMapping[] {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return [];
-        }
-
-        const combinedMappings = this.buildCombinedMappings(config);
-
-        return combinedMappings.map(({ mapping, origin }) => {
-            const absoluteSource = path.join(workspaceRoot, mapping.source);
-            const absoluteDestination = mapping.destination;
-            
-            // Convert glob pattern to regex for file matching with platform-specific logic
-            let regexPattern = this.globToRegex(mapping.source);
-            
-            // Anchor the pattern to match from start to end
-            const sourceRegex = new RegExp(`^${regexPattern}$`);
-
-            smartLog.debug(`[${process.platform}] Compiled mapping: "${mapping.source}" -> regex: ${sourceRegex} (origin: ${origin})`);
-
-            return {
-                ...mapping,
-                absoluteSource,
-                absoluteDestination,
-                sourceRegex,
-                origin
-            };
-        });
-    }
-
-    /**
-     * Combine smart deploy mappings with local deploy overrides.
-     */
-    private buildCombinedMappings(config: SmartDeployConfig): Array<{ mapping: SmartDeployMapping; origin: 'smart' | 'local'; }> {
-        const combined: Array<{ mapping: SmartDeployMapping; origin: 'smart' | 'local'; }> = [];
-        const seen = new Set<string>();
-
-        const pushMapping = (mapping: SmartDeployMapping, origin: 'smart' | 'local') => {
-            const key = `${mapping.source}|${mapping.destination}`;
-            if (seen.has(key)) {
-                smartLog.debug(`Skipping duplicate mapping override for ${mapping.source} → ${mapping.destination} (${origin})`);
-                return;
-            }
-            seen.add(key);
-            combined.push({ mapping, origin });
-        };
-
-        const localMappings = config.localDeploy?.mappings ?? [];
-        localMappings
-            .filter(mapping => mapping && mapping.enabled !== false)
-            .forEach(mapping => pushMapping(this.transformLocalMapping(mapping), 'local'));
-
-        if (Array.isArray(config.mappings)) {
-            config.mappings.forEach(mapping => pushMapping(mapping, 'smart'));
-        }
-
-        return combined;
-    }
-
-    /**
-     * Convert local deploy mapping entries to smart deploy mappings.
-     */
-    private transformLocalMapping(mapping: LocalDeployMapping): SmartDeployMapping {
-        const normalizedSource = this.normalizeLocalMappingSource(mapping.source);
-        const normalizedDestination = this.normalizeLocalMappingDestination(mapping.destination);
-
-        return {
-            source: normalizedSource,
-            destination: normalizedDestination,
-            needsReload: mapping.needsReload ?? false,
-            description: mapping.description || `Local deploy mapping (${normalizedSource} → ${normalizedDestination})`,
-            extensions: mapping.extensions,
-            excludeExtensions: mapping.excludeExtensions
-        };
-    }
-
-    private normalizeLocalMappingSource(source: string): string {
-        if (!source) {
-            return '**/*';
-        }
-
-        let normalized = source.replace(/\\/g, '/').replace(/^\/+/, '');
-
-        const hasWildcard = /[*?]/.test(normalized);
-        if (hasWildcard) {
-            return normalized;
-        }
-
-        normalized = normalized.replace(/\/+$/, '');
-        if (!normalized) {
-            return '**/*';
-        }
-
-        const ext = path.extname(normalized);
-        if (ext) {
-            return normalized;
-        }
-
-        return `${normalized}/**/*`;
-    }
-
-    private normalizeLocalMappingDestination(destination: string): string {
-        if (!destination) {
-            return '{relative}';
-        }
-
-        let normalized = destination.replace(/\\/g, '/').replace(/^\/+/, '');
-
-        if (!normalized.includes('{relative}')) {
-            normalized = normalized.replace(/\/+$/, '');
-            normalized = normalized ? `${normalized}/{relative}` : '{relative}';
-        }
-
-        return normalized;
-    }
-
-    private getMappingRoot(sourcePattern: string): string | null {
-        if (!sourcePattern) {
-            return null;
-        }
-
-        const normalized = sourcePattern.replace(/\\/g, '/').replace(/^\/+/, '');
-        const wildcardIndex = normalized.search(/[*?]/);
-        if (wildcardIndex >= 0) {
-            return normalized.substring(0, wildcardIndex).replace(/\/+$/, '') || null;
-        }
-
-        return normalized.replace(/\/+$/, '') || null;
-    }
-
-    private resolveCompiledOutputDirectories(): string[] {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return [];
-        }
-
-        if ((!this.compiledMappings || !this.compiledMappings.length) && this.smartDeployConfig) {
-            this.compiledMappings = this.compileMappings(this.smartDeployConfig);
-        }
-
-        const outputs = new Set<string>();
-
-        if (this.compiledMappings) {
-            for (const mapping of this.compiledMappings) {
-                const isClassMapping =
-                    (mapping.extensions && mapping.extensions.includes('.class')) ||
-                    mapping.source.toLowerCase().includes('.class');
-
-                if (!isClassMapping) {
-                    continue;
-                }
-
-                const root = this.getMappingRoot(mapping.source);
-                if (root) {
-                    outputs.add(path.join(workspaceRoot, root));
-                }
-            }
-        }
-
-        if (!outputs.size) {
-            switch (this.projectStructure?.type) {
-                case 'maven':
-                    outputs.add(path.join(workspaceRoot, 'target/classes'));
-                    break;
-                case 'gradle':
-                    outputs.add(path.join(workspaceRoot, 'build/classes/java/main'));
-                    break;
-                default:
-                    outputs.add(path.join(workspaceRoot, 'bin'));
-                    break;
-            }
-        }
-
-        return Array.from(outputs);
-    }
-
-    private ensureLocalDeployStructure(config: SmartDeployConfig, options?: { injectTemplate?: boolean }): void {
-        if (!config.localDeploy || !Array.isArray(config.localDeploy.mappings)) {
-            config.localDeploy = { mappings: [] };
-        }
-
-        const shouldInjectTemplate = options?.injectTemplate &&
-            ['plain', 'eclipse'].includes(config.projectType) &&
-            config.localDeploy.mappings.length === 0;
-
-        if (shouldInjectTemplate) {
-            config.localDeploy.mappings.push({
-                description: 'Example: copy conf directory into WEB-INF/classes/conf',
-                source: 'conf',
-                destination: 'WEB-INF/classes/conf',
-                enabled: false,
-                needsReload: false
-            });
-        }
-    }
-
-    /**
-     * Convert glob pattern to regex with proper cross-platform support
-     */
-    private globToRegex(globPattern: string): string {
-        // Platform-specific path separator handling
-        const isWindows = process.platform === 'win32';
-        const pathSeparator = isWindows ? '\\\\' : '/';
-        const pathSeparatorClass = isWindows ? '[\\\\\\/]' : '\\/';
-        
-        smartLog.debug(`[${process.platform}] Converting glob: "${globPattern}"`);
-        
-        let regexPattern = globPattern
-            // First, handle glob patterns by replacing with placeholders
-            .replace(/\*\*/g, '__DOUBLESTAR__')
-            .replace(/\*/g, '__SINGLESTAR__')
-            .replace(/\?/g, '__QUESTION__')
-            // Escape regex special characters
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-            // Make **/<filename> match files at root level (zero directories)
-            .replace(/__DOUBLESTAR__\/__SINGLESTAR__/g, '(__DOUBLESTAR__/)?__SINGLESTAR__')
-            // Convert glob placeholders to regex patterns
-            .replace(/__DOUBLESTAR__/g, '.*')                    // ** -> match any characters including path separators
-            .replace(/__SINGLESTAR__/g, `[^${pathSeparator}]*`)  // * -> match any characters except path separators  
-            .replace(/__QUESTION__/g, `[^${pathSeparator}]`);    // ? -> match single character except path separators
-        
-        // Convert forward slashes to platform-specific path separator pattern
-        regexPattern = regexPattern.replace(/\//g, pathSeparatorClass);
-        
-        smartLog.debug(`[${process.platform}] Regex result: "${regexPattern}"`);
-        
-        return regexPattern;
-    }
-
-    /**
-     * Check if a file matches any compiled mapping with enhanced debugging
-     */
-    private findMatchingMapping(filePath: string): CompiledMapping | null {
-        if (!this.compiledMappings) {
-            return null;
-        }
-
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return null;
-        }
-
-        // Normalize paths for cross-platform compatibility
-        const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
-        
-        for (const mapping of this.compiledMappings) {
-            const regexMatch = mapping.sourceRegex.test(relativePath);
-            
-            if (regexMatch) {
-                const ext = path.extname(filePath).toLowerCase();
-                
-                if (mapping.extensions) {
-                    if (!mapping.extensions.includes(ext)) {
-                        continue;
-                    }
-                }
-                
-                if (mapping.excludeExtensions) {
-                    if (mapping.excludeExtensions.includes(ext)) {
-                        continue;
-                    }
-                }
-                
-                smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
-                return mapping;
-            }
-        }
-        
-        smartLog.debug(`No mapping for: ${relativePath}`);
-        return null;
-    }
-
-    /**
-     * Generate destination path from mapping and source file with proper relative path handling
-     */
-    private async generateDestinationPath(
-        mapping: CompiledMapping,
-        sourceFile: string,
-        options: { ensureParent?: boolean } = {}
-    ): Promise<string> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return '';
-        }
-
-        const webappsRoot = await getTomcat().getWebappsRoot();
-        if (!webappsRoot) {
-            return '';
-        }
-
-        // Get the webapp directory
-        const webappDir = path.join(webappsRoot, this.projectStructure?.webappName || '');
-
-        // Get relative path from workspace
-        const relativePath = path.relative(workspaceRoot, sourceFile);
-        
-        // Extract the correct relative portion based on the mapping source pattern
-        const relativePortion = this.extractRelativePortionFromMapping(mapping, relativePath, sourceFile);
-        
-        // Replace {relative} placeholder with actual relative path
-        let destinationPath = mapping.destination;
-        if (destinationPath.includes('{relative}')) {
-            destinationPath = destinationPath.replace('{relative}', relativePortion);
-        } else {
-            // If no placeholder, ensure destination includes the relative path
-            destinationPath = path.join(destinationPath, relativePortion);
-        }
-        
-        // Create full destination path
-        const fullDestinationPath = path.join(webappDir, destinationPath);
-        
-        if (options.ensureParent !== false) {
-            const targetDir = path.dirname(fullDestinationPath);
-            if (!fs.existsSync(targetDir)) {
-                fs.mkdirSync(targetDir, { recursive: true });
-            }
-        }
-        
-        smartLog.debug(`Path mapping: ${relativePath} → ${destinationPath}`);
-        return fullDestinationPath;
-    }
-
-    /**
-     * Extract the correct relative portion from mapping pattern with enhanced cross-platform support
-     */
-    private extractRelativePortionFromMapping(mapping: CompiledMapping, relativePath: string, sourceFile: string): string {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return path.basename(sourceFile);
-        }
-
-        // Normalize all paths to use forward slashes for consistent processing
-        const sourcePattern = this.normalizePath(mapping.source);
-        const normalizedRelativePath = this.normalizePath(relativePath);
-        
-        smartLog.debug(`[${process.platform}] Extracting relative portion for pattern: ${sourcePattern}`);
-        smartLog.debug(`[${process.platform}] File relative path: ${normalizedRelativePath}`);
-        
-        // Handle different pattern types with enhanced cross-platform logic
-        if (sourcePattern.includes('**/*')) {
-            // Pattern like 'target/classes/**/*.class'
-            const basePath = sourcePattern.split('/**')[0]; // Get 'target/classes'
-            
-            // Use more robust path matching
-                if (this.pathStartsWith(normalizedRelativePath, basePath)) {
-                    const afterBasePath = normalizedRelativePath.substring(basePath.length).replace(/^\/+/, '');
-                    smartLog.debug(`[${process.platform}] Extracted relative portion: ${afterBasePath}`);
-                    return afterBasePath;
-                }
-        } else if (sourcePattern.includes('**/')) {
-            // Pattern like 'src/**/filename'
-            const parts = sourcePattern.split('**/');
-            if (parts.length >= 2) {
-                const basePath = parts[0].replace(/\/+$/, ''); // Remove trailing slashes
-                if (this.pathStartsWith(normalizedRelativePath, basePath)) {
-                    const afterBasePath = normalizedRelativePath.substring(basePath.length).replace(/^\/+/, '');
-                    smartLog.debug(`[${process.platform}] Extracted relative portion (recursive): ${afterBasePath}`);
-                    return afterBasePath;
-                }
-            }
-        } else if (sourcePattern.includes('*')) {
-            // Simple wildcard pattern - use cross-platform path.dirname
-            const basePath = this.normalizePath(path.dirname(sourcePattern));
-            if (basePath !== '.' && this.pathStartsWith(normalizedRelativePath, basePath)) {
-                const afterBasePath = normalizedRelativePath.substring(basePath.length).replace(/^\/+/, '');
-                smartLog.debug(`[${process.platform}] Extracted relative portion (wildcard): ${afterBasePath}`);
-                return afterBasePath;
-            }
-        }
-        
-        // Fallback: for class files, try to preserve package structure
-        if (sourceFile.endsWith('.class')) {
-            return this.extractClassRelativePath(sourceFile, normalizedRelativePath);
-        }
-        
-        // Default fallback
-        smartLog.debug(`[${process.platform}] Using basename fallback: ${path.basename(sourceFile)}`);
-        return path.basename(sourceFile);
-    }
-
-    /**
-     * Normalize path separators for cross-platform consistency
-     */
-    private normalizePath(inputPath: string): string {
-        return inputPath.replace(/\\/g, '/');
-    }
-
-    /**
-     * Check if a path starts with a given prefix, handling edge cases
-     */
-    private pathStartsWith(fullPath: string, prefix: string): boolean {
-        if (!prefix || prefix === '.') {
-            return true;
-        }
-        
-        const normalizedPrefix = prefix.replace(/\/+$/, ''); // Remove trailing slashes
-        return fullPath === normalizedPrefix || fullPath.startsWith(normalizedPrefix + '/');
-    }
-
-    /**
-     * Extract relative path for class files preserving package structure with cross-platform support
-     */
-    private extractClassRelativePath(sourceFile: string, relativePath: string): string {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot || !this.projectStructure) {
-            return path.basename(sourceFile);
-        }
-
-        // Determine the output directory based on project type
-        let outputPattern: string;
-        switch (this.projectStructure.type) {
-            case 'maven':
-                outputPattern = 'target/classes';
-                break;
-            case 'gradle':
-                outputPattern = 'build/classes/java/main';
-                break;
-            default:
-                outputPattern = 'bin';
-                break;
-        }
-
-        // Normalize paths for cross-platform consistency
-        const normalizedOutputPattern = this.normalizePath(outputPattern);
-        const normalizedRelativePath = this.normalizePath(relativePath);
-        
-        smartLog.debug(`[${process.platform}] Class path extraction - Output pattern: ${normalizedOutputPattern}`);
-        smartLog.debug(`[${process.platform}] Class path extraction - Relative path: ${normalizedRelativePath}`);
-        
-        // If the file is in the output directory, extract the package path
-        if (this.pathStartsWith(normalizedRelativePath, normalizedOutputPattern)) {
-            const packagePath = normalizedRelativePath.substring(normalizedOutputPattern.length).replace(/^\/+/, '');
-            smartLog.debug(`[${process.platform}] Extracted class package path: ${packagePath}`);
-            return packagePath;
-        }
-
-        // Fallback to basename
-        smartLog.debug(`[${process.platform}] Class path extraction fallback to basename: ${path.basename(sourceFile)}`);
-        return path.basename(sourceFile);
-    }
-
-    /**
-     * Debug method: Print current smart deployment status and configuration
-     */
-    public async debugSmartDeploymentStatus(): Promise<void> {
-        smartLog.info('🔍 === Smart Deployment Debug Status ===');
-        
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            smartLog.warn('❌ No workspace root found');
-            return;
-        }
-
-        smartLog.info(`📁 Workspace Root: ${workspaceRoot}`);
-        smartLog.info(`🎯 Auto Deploy Mode: ${this.autoDeployMode}`);
-        smartLog.info(`🔧 Is Deploying: ${this.isDeploying}`);
-        smartLog.info(`📊 File Watchers Active: ${this.fileWatchers.length}`);
-        
-        // Project Structure
-        if (this.projectStructure) {
-            smartLog.info(`🏗️ Project Structure:`);
-            smartLog.info(`   - Type: ${this.projectStructure.type}`);
-            smartLog.info(`   - WebappName: ${this.projectStructure.webappName}`);
-        } else {
-            smartLog.warn('⚠️ Project structure not detected');
-        }
-
-        // Smart Deploy Configuration
-        if (this.smartDeployConfig) {
-            smartLog.info(`⚙️ Smart Deploy Config:`);
-            smartLog.info(`   - Project Type: ${this.smartDeployConfig.projectType}`);
-            smartLog.info(`   - Webapp Name: ${this.smartDeployConfig.webappName}`);
-            smartLog.info(`   - Mappings: ${this.smartDeployConfig.mappings.length} rules`);
-            smartLog.info(`   - Debounce Time: ${this.smartDeployConfig.settings.debounceTime}ms`);
-            smartLog.info(`   - Enabled: ${this.smartDeployConfig.settings.enabled}`);
-            
-            // List all mappings
-            this.smartDeployConfig.mappings.forEach((mapping, index) => {
-                smartLog.info(`     Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`);
-            });
-        } else {
-            smartLog.warn('⚠️ Smart deploy configuration not loaded');
-        }
-
-        // File Watcher Details
-        smartLog.info(`👀 Active File Watchers:`);
-        this.fileWatchers.forEach((_, index) => {
-            smartLog.info(`   Watcher ${index + 1}: Active`);
-        });
-
-        // Batch Processing Status
-        smartLog.info(`📦 Batch Processing Status:`);
-        smartLog.info(`   - Pending Compiled Files: ${this.pendingCompiledFiles.size}`);
-        smartLog.info(`   - Batch Timer Active: ${this.batchDeploymentTimer ? 'Yes' : 'No'}`);
-        
-        if (this.pendingCompiledFiles.size > 0) {
-            smartLog.info(`   - Pending Files:`);
-            Array.from(this.pendingCompiledFiles).forEach((file, index) => {
-                const fileInfo = JSON.parse(file);
-                smartLog.info(`     ${index + 1}. ${path.basename(fileInfo.filePath)} (${fileInfo.eventType})`);
-            });
-        }
-
-        // Maven Configuration Check
-        const mavenParser = new MavenConfigParser(workspaceRoot);
-        if (mavenParser.isProjectSupported()) {
-            smartLog.info(`🎯 Maven Project Detected - running Maven debug...`);
-            await mavenParser.debugMavenConfiguration();
-        } else {
-            smartLog.info(`📄 Maven pom.xml not found in workspace root`);
-        }
-
-        smartLog.info('🔍 === End Smart Deployment Debug Status ===');
-    }
-
-    /**
-     * Debug method: Test compiled file watcher manually
-     */
-    public async testCompiledFileWatcher(): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            smartLog.warn('❌ No workspace root found');
-            return;
-        }
-
-        if (!this.projectStructure) {
-            smartLog.warn('⚠️ Project structure not detected, detecting now...');
-            this.projectStructure = this.detectProjectStructure();
-        }
-
-        smartLog.info('🧪 === Testing Compiled File Watcher ===');
-        
-        // Check output directories based on project type
-        let outputDirs: string[] = [];
-        switch (this.projectStructure.type) {
-            case 'maven':
-                outputDirs = ['target/classes', 'target/test-classes'];
-                break;
-            case 'gradle':
-                outputDirs = ['build/classes/java/main', 'build/classes/java/test'];
-                break;
-            case 'eclipse':
-            case 'plain':
-            default:
-                outputDirs = ['bin', 'out'];
-                break;
-        }
-
-        for (const outputDir of outputDirs) {
-            const fullOutputPath = path.join(workspaceRoot, outputDir);
-            const exists = fs.existsSync(fullOutputPath);
-            smartLog.info(`📁 Output Directory: ${outputDir} - ${exists ? '✅ EXISTS' : '❌ NOT FOUND'}`);
-            
-            if (exists) {
-                // Look for .class files
-                try {
-                    const classFiles = await glob(`${fullOutputPath}/**/*.class`);
-                    smartLog.info(`   - Found ${classFiles.length} .class files`);
-                    
-                    if (classFiles.length > 0) {
-                        classFiles.slice(0, 5).forEach(file => {
-                            const relativePath = path.relative(workspaceRoot, file);
-                            smartLog.info(`     - ${relativePath}`);
-                        });
-                        if (classFiles.length > 5) {
-                            smartLog.info(`     - ... and ${classFiles.length - 5} more files`);
-                        }
-                    }
-                } catch (error) {
-                    smartLog.warn(`   - Error scanning for .class files: ${error}`);
-                }
-            }
-        }
-
-        smartLog.info('🧪 === End Compiled File Watcher Test ===');
-    }
+    smartLog.info("🧪 === End Compiled File Watcher Test ===");
+  }
 }
