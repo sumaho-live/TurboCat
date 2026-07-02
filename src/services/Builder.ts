@@ -678,7 +678,20 @@ export class Builder {
         return;
       }
 
+      // Load or create the default config template
       this.smartDeployConfig = await this.loadSmartDeployConfig();
+
+      // Re-apply WTP mappings on top of the loaded config (detectProjectStructure
+      // may have set them on a temporary config that was just overwritten)
+      const wtp = this.parseEclipseWtpComponent(workspaceRoot);
+      if (wtp?.additionalMappings.length) {
+        this.mergeWtpMappings(wtp, this.projectStructure.defaultWebappName);
+      }
+
+      // Persist the final config (template + WTP mappings) to disk
+      if (this.smartDeployConfig) {
+        await this.saveSmartDeployConfig(this.smartDeployConfig);
+      }
     } catch (error) {
       smartLog.debug(`Skipped creating local config template: ${error}`);
     }
@@ -913,6 +926,99 @@ export class Builder {
   }
 
   /**
+   * Build smart deploy mappings from WTP component and detected project roots.
+   * Replaces the hardcoded DEFAULT_MAPPINGS template with mappings that reflect
+   * the actual Eclipse WTP configuration.
+   */
+  private buildWtpSmartDeployMappings(
+    workspaceRoot: string,
+  ): SmartDeployMapping[] {
+    const wtp = this.parseEclipseWtpComponent(workspaceRoot);
+    if (!wtp) {
+      return [];
+    }
+
+    const structure = this.projectStructure ?? this.detectProjectStructure();
+    const mappings: SmartDeployMapping[] = [];
+
+    // Class mapping from java output dir
+    const outputDir = structure.javaOutputDir || "bin";
+    mappings.push({
+      source: `${outputDir}/**/*.class`,
+      destination: "WEB-INF/classes/{relative}",
+      needsReload: true,
+      description: "Eclipse WTP: compiled classes",
+      extensions: [".class"],
+    });
+
+    // Web resource mapping from each web resource root
+    for (const root of structure.webResourceRoots) {
+      if (root) {
+        mappings.push({
+          source: `${root}/**/*`,
+          destination: "{relative}",
+          needsReload: false,
+          description: `Eclipse WTP: web resources (${root})`,
+          excludeExtensions: [".class", ".java"],
+        });
+      }
+    }
+
+    // Resource mappings (if javaSourceRoots differ from default)
+    for (const root of structure.javaSourceRoots) {
+      if (root && root !== outputDir) {
+        mappings.push({
+          source: `${root}/**/*`,
+          destination: "WEB-INF/classes/{relative}",
+          needsReload: true,
+          description: `Eclipse WTP: source resources (${root})`,
+          excludeExtensions: [".java", ".class"],
+        });
+      }
+    }
+
+    return mappings;
+  }
+
+  /**
+   * Merge Eclipse WTP additional mappings into the smart deploy config.
+   * Shared by both Maven+WTP and Eclipse detection paths.
+   */
+  private mergeWtpMappings(
+    wtp: { additionalMappings: LocalDeployMapping[] },
+    defaultWebappName: string,
+  ): void {
+    if (!this.smartDeployConfig) {
+      const detectedType = this.projectStructure?.type || "eclipse";
+      this.smartDeployConfig = {
+        projectType: detectedType,
+        webappName: this.resolveWebappName(defaultWebappName),
+        mappings: DEFAULT_MAPPINGS[detectedType] || DEFAULT_MAPPINGS.eclipse,
+        settings: {
+          debounceTime: vscode.workspace
+            .getConfiguration("turbocat")
+            .get<number>("smartDeployDebounce", 300),
+          enabled: true,
+          logLevel: "info",
+        },
+      };
+    }
+    if (!this.smartDeployConfig.localDeploy) {
+      this.smartDeployConfig.localDeploy = { mappings: [] };
+    }
+    const existing = new Set(
+      this.smartDeployConfig.localDeploy.mappings.map(
+        (m) => `${m.source}|${m.destination}`,
+      ),
+    );
+    for (const m of wtp.additionalMappings) {
+      if (!existing.has(`${m.source}|${m.destination}`)) {
+        this.smartDeployConfig.localDeploy.mappings.push(m);
+      }
+    }
+  }
+
+  /**
    * Project Structure Detection
    *
    * Auto-detects project structure and configuration for smart deployment:
@@ -935,11 +1041,25 @@ export class Builder {
     if (fs.existsSync(path.join(workspaceRoot, "pom.xml"))) {
       const defaultWebappName =
         this.getMavenArtifactId(workspaceRoot) || path.basename(workspaceRoot);
+
+      // If the project also has Eclipse .settings, merge WTP deployment mappings
+      const wtp = this.parseEclipseWtpComponent(workspaceRoot);
+      const webResourceRoots = wtp?.webResourceRoots.length
+        ? wtp.webResourceRoots
+        : ["src/main/webapp"];
+      const javaSourceRoots = wtp?.javaSourceRoots.length
+        ? wtp.javaSourceRoots
+        : ["src/main/java"];
+
+      if (wtp?.additionalMappings.length) {
+        this.mergeWtpMappings(wtp, defaultWebappName);
+      }
+
       return {
         type: "maven",
         javaOutputDir: "target/classes",
-        javaSourceRoots: ["src/main/java"],
-        webResourceRoots: ["src/main/webapp"],
+        javaSourceRoots,
+        webResourceRoots,
         defaultWebappName,
         webappName: this.resolveWebappName(defaultWebappName),
       };
@@ -976,33 +1096,7 @@ export class Builder {
 
       // Merge WTP additional mappings into smart deploy config
       if (wtp?.additionalMappings.length) {
-        if (!this.smartDeployConfig) {
-          this.smartDeployConfig = {
-            projectType: "eclipse",
-            webappName: this.resolveWebappName(defaultWebappName),
-            mappings: DEFAULT_MAPPINGS.eclipse,
-            settings: {
-              debounceTime: vscode.workspace
-                .getConfiguration("turbocat")
-                .get<number>("smartDeployDebounce", 300),
-              enabled: true,
-              logLevel: "info",
-            },
-          };
-        }
-        if (!this.smartDeployConfig.localDeploy) {
-          this.smartDeployConfig.localDeploy = { mappings: [] };
-        }
-        const existing = new Set(
-          this.smartDeployConfig.localDeploy.mappings.map(
-            (m) => `${m.source}|${m.destination}`,
-          ),
-        );
-        for (const m of wtp.additionalMappings) {
-          if (!existing.has(`${m.source}|${m.destination}`)) {
-            this.smartDeployConfig.localDeploy.mappings.push(m);
-          }
-        }
+        this.mergeWtpMappings(wtp, defaultWebappName);
       }
 
       return {
@@ -1109,16 +1203,16 @@ export class Builder {
     if (this.autoDeployMode === "Smart") {
       this.autoDeployMode = "Disable";
       this.disposeFileWatchers();
-      smartLog.warn(
-        "Smart deploy PAUSED for manual deployment",
-      );
+      smartLog.warn("Smart deploy PAUSED for manual deployment");
     }
 
     try {
       try {
         this.projectStructure = this.detectProjectStructure();
       } catch (error) {
-        getLogger().warn("Unable to refresh project structure before deployment");
+        getLogger().warn(
+          "Unable to refresh project structure before deployment",
+        );
         if (error) {
           smartLog.debug(`Project structure detection error: ${error}`);
         }
@@ -1409,14 +1503,22 @@ export class Builder {
         return;
       }
 
-      // Detect project structure
+      // Load or create smart deploy configuration FIRST
+      this.smartDeployConfig = await this.loadSmartDeployConfig();
+
+      // Detect project structure SECOND — this may merge WTP mappings
+      // into the already-loaded config (in-memory only; sufficient for runtime)
       this.projectStructure = this.detectProjectStructure();
       smartLog.debug(
         `Detected project structure: ${JSON.stringify(this.projectStructure)}`,
       );
 
-      // Load or create smart deploy configuration
-      this.smartDeployConfig = await this.loadSmartDeployConfig();
+      // For Eclipse/plain projects, persist WTP mappings to the JSON config
+      // file so they survive restarts. For Maven, pom.xml is the authority;
+      // the in-memory merge above is all that's needed.
+      if (this.smartDeployConfig && this.projectStructure.type !== "maven") {
+        await this.saveSmartDeployConfig(this.smartDeployConfig);
+      }
 
       // Compile mappings for runtime efficiency
       this.compiledMappings = this.compileMappings(this.smartDeployConfig);
@@ -2624,6 +2726,12 @@ export class Builder {
     }
 
     report("Local deployment complete", 0);
+
+    // Ensure META-INF exists with MANIFEST.MF (normally generated by Maven)
+    this.ensureMetaInf(
+      path.join(targetDir, "META-INF"),
+      path.basename(targetDir),
+    );
   }
 
   /**
@@ -2756,10 +2864,12 @@ export class Builder {
     if (classCount === 0) {
       smartLog.warn(
         `PreBuilt: no class files found in ${targetClassesDir} after copy. ` +
-        `Source ${classesDir} may be empty — ensure the Java Language Server has compiled the project.`
+          `Source ${classesDir} may be empty — ensure the Java Language Server has compiled the project.`,
       );
     } else {
-      smartLog.info(`PreBuilt: deployed ${classCount} compiled files to WEB-INF/classes`);
+      smartLog.info(
+        `PreBuilt: deployed ${classCount} compiled files to WEB-INF/classes`,
+      );
     }
 
     report("Updating libraries...", 15);
@@ -2777,6 +2887,12 @@ export class Builder {
     await this.applyLocalDeployMappings();
 
     report("Pre-built deployment complete", 0);
+
+    // Ensure META-INF exists with MANIFEST.MF (normally generated by Maven)
+    this.ensureMetaInf(
+      path.join(targetDir, "META-INF"),
+      path.basename(targetDir),
+    );
   }
 
   /**
@@ -2816,7 +2932,11 @@ export class Builder {
 
       // Use absolute mvn path when mavenHome is configured
       const mvnCmd = mavenHome
-        ? path.join(mavenHome, "bin", `mvn${process.platform === "win32" ? ".cmd" : ""}`)
+        ? path.join(
+            mavenHome,
+            "bin",
+            `mvn${process.platform === "win32" ? ".cmd" : ""}`,
+          )
         : "mvn";
       getLogger().info(`Maven command: ${mvnCmd} clean package`);
 
@@ -3095,6 +3215,28 @@ export class Builder {
   }
 
   /**
+   * Ensure META-INF directory exists at the deployed webapp root with a
+   * minimal MANIFEST.MF. Normally created by Maven's package phase;
+   * PreBuilt and Local deploys skip Maven so this compensates.
+   */
+  private ensureMetaInf(metaInfPath: string, appName: string): void {
+    if (!fs.existsSync(metaInfPath)) {
+      fs.mkdirSync(metaInfPath, { recursive: true });
+    }
+    const manifestPath = path.join(metaInfPath, "MANIFEST.MF");
+    if (!fs.existsSync(manifestPath)) {
+      const manifest = [
+        "Manifest-Version: 1.0",
+        `Implementation-Title: ${appName}`,
+        `Implementation-Version: 1.0`,
+        "",
+      ].join("\n");
+      fs.writeFileSync(manifestPath, manifest, "utf-8");
+      smartLog.info("Generated META-INF/MANIFEST.MF for deployed webapp");
+    }
+  }
+
+  /**
    * Atomic File Synchronization Utility
    *
    * Implements aggressive directory synchronization with:
@@ -3228,14 +3370,18 @@ export class Builder {
       }
     }
 
-    // Priority 3: Create default configuration
+    // Priority 3: Create default configuration using detected project roots.
+    // For Eclipse projects this incorporates WTP-derived webResourceRoots and
+    // javaSourceRoots so the generated JSON reflects reality, not a template.
     this.projectStructure = this.detectProjectStructure();
     this.defaultSmartDeployWebappName = this.projectStructure.defaultWebappName;
+    const baseMappings =
+      DEFAULT_MAPPINGS[this.projectStructure.type] || DEFAULT_MAPPINGS.plain;
+    const wtpMappings = this.buildWtpSmartDeployMappings(workspaceRoot);
     const defaultConfig: SmartDeployConfig = {
       projectType: this.projectStructure.type,
       webappName: this.projectStructure.webappName,
-      mappings:
-        DEFAULT_MAPPINGS[this.projectStructure.type] || DEFAULT_MAPPINGS.plain,
+      mappings: wtpMappings.length > 0 ? wtpMappings : baseMappings,
       settings: {
         debounceTime: vscode.workspace
           .getConfiguration("turbocat")

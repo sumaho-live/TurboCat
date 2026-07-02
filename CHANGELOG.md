@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2]
+### Fixed
+- **META-INF generation**: `localDeploy` and `mavenPreBuiltDeploy` now create a `META-INF/MANIFEST.MF` with basic metadata when the directory is missing, preventing Tomcat startup failures from an empty `META-INF/`.
+- **Eclipse WTP config persistence**: WTP-derived smart deploy mappings are now correctly persisted to `.vscode/tomcat-smart-deploy.json` instead of a hardcoded template. The JSON file reflects the actual `webResourceRoots` and `javaSourceRoots` parsed from `.settings/org.eclipse.wst.common.component`.
+- **Maven + Eclipse hybrid**: `detectProjectStructure` now also parses WTP for Maven projects that have a `.settings` folder, merging WTP-derived roots and additional mappings into the smart deploy config.
+- **Log level for smart deploy**: the `showSmartDeployLog=false` filter now respects the user's `turbocat.logLevel` setting instead of hardcoding `INFO`, so `logLevel=DEBUG` correctly shows smart deploy debug messages even when the log is toggled off.
+- **Config initialization order**: fixed a bug where `loadSmartDeployConfig` would overwrite WTP mappings that were merged during `detectProjectStructure`, by ensuring the config is loaded first and WTP mappings are re-applied afterward.
+- **PreBuilt class deployment**: replaced `copyDirectorySync` with `brutalSync` for class deployment and added post-copy file count verification with a warning when zero files are deployed.
+- **Smart deploy pause/resume**: pause and resume events now log at WARN level for visibility; fixed an edge case where early returns during deployment would leave smart deploy permanently disabled.
+- **Maven Home**: added `turbocat.mavenHome` setting; `mavenDeploy` now uses the absolute `mvn` path and injects `MAVEN_HOME`/`JAVA_HOME` into the subprocess when the system environment lacks them.
+
 ## [1.5.1]
 ### Fixed
 - **PreBuilt deploy**: replaced fragile `copyDirectorySync` with robust `brutalSync` for class deployment, and added post-copy verification that logs a warning if no class files were deployed.

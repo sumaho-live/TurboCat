@@ -460,9 +460,9 @@ export class Logger {
     }
 
     if (!isTomcatLog && !this.showSmartDeployLog && context === "smartDeploy") {
-      // When smart deploy logs are hidden, still show INFO and above
-      // so users can see deployment confirmations. Only suppress DEBUG chatter.
-      if (messageLevelValue < this.logLevels.INFO) {
+      // When smart deploy logs are hidden, respect the user's logLevel
+      // instead of hardcoding INFO, so logLevel=DEBUG still shows debug chatter.
+      if (messageLevelValue < threshold) {
         return;
       }
     }
