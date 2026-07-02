@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.3]
+### Added
+- **PreBuilt for Eclipse projects**: `PreBuilt` deployment now also works for Eclipse projects (`.classpath` + `bin/`). Uses the Eclipse compiler's existing output instead of re-running javac. Appears in QuickPick when `bin/` exists.
+
+### Fixed
+- **Maven deploy error logging**: `executeCommand` now combines stdout + stderr so Maven errors (written to stderr) are not silently dropped. When no structured `[ERROR]` lines are found, the raw output is included in the error message and logged to the output channel.
+
 ## [1.5.2]
 ### Fixed
 - **META-INF generation**: `localDeploy` and `mavenPreBuiltDeploy` now create a `META-INF/MANIFEST.MF` with basic metadata when the directory is missing, preventing Tomcat startup failures from an empty `META-INF/`.

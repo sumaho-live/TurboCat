@@ -152,7 +152,7 @@ describe('Builder Tests', () => {
     });
   });
 
-  describe('mavenPreBuiltDeploy()', () => {
+  describe('preBuiltDeploy()', () => {
     it('deploys pre-built classes and web resources without running mvn', async () => {
       const tomcatHome = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-pb-test-'));
       try {
@@ -186,8 +186,8 @@ describe('Builder Tests', () => {
         });
 
         await (builder as unknown as {
-          mavenPreBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
-        }).mavenPreBuiltDeploy(workspaceRoot, targetDir, tomcatHome);
+          preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
+        }).preBuiltDeploy(workspaceRoot, targetDir, tomcatHome);
 
         // Verify web resource was deployed
         assert.strictEqual(fs.existsSync(path.join(targetDir, 'index.jsp')), true);
@@ -206,8 +206,8 @@ describe('Builder Tests', () => {
 
       await assert.rejects(
         (builder as unknown as {
-          mavenPreBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
-        }).mavenPreBuiltDeploy(workspaceRoot, '/tmp/fake-target', '/tmp/fake-tomcat'),
+          preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
+        }).preBuiltDeploy(workspaceRoot, '/tmp/fake-target', '/tmp/fake-tomcat'),
         /target.classes not found/
       );
     });
