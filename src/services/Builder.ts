@@ -1109,8 +1109,8 @@ export class Builder {
     if (this.autoDeployMode === "Smart") {
       this.autoDeployMode = "Disable";
       this.disposeFileWatchers();
-      smartLog.info(
-        "Smart deploy paused for manual deployment — will resume after completion",
+      smartLog.warn(
+        "Smart deploy PAUSED for manual deployment",
       );
     }
 
@@ -1231,7 +1231,7 @@ export class Builder {
             err as string,
           ),
         );
-        smartLog.info("Smart deploy resumed after manual deployment");
+        smartLog.warn("Smart deploy RESUMED after manual deployment");
       }
     }
   }
@@ -2747,10 +2747,20 @@ export class Builder {
 
     report("Copying compiled classes...", 30);
     const targetClassesDir = path.join(targetDir, "WEB-INF", "classes");
-    if (fs.existsSync(targetClassesDir)) {
-      fs.rmSync(targetClassesDir, { recursive: true, force: true });
+    // Use brutalSync instead of copyDirectorySync — brutalSync handles
+    // directory merging more robustly and won't silently drop files.
+    this.brutalSync(classesDir, targetClassesDir);
+
+    // Verify classes were actually copied
+    const classCount = this.countFilesRecursive(targetClassesDir);
+    if (classCount === 0) {
+      smartLog.warn(
+        `PreBuilt: no class files found in ${targetClassesDir} after copy. ` +
+        `Source ${classesDir} may be empty — ensure the Java Language Server has compiled the project.`
+      );
+    } else {
+      smartLog.info(`PreBuilt: deployed ${classCount} compiled files to WEB-INF/classes`);
     }
-    this.copyDirectorySync(classesDir, targetClassesDir);
 
     report("Updating libraries...", 15);
     const targetLibDir = path.join(targetDir, "WEB-INF", "lib");
@@ -2792,13 +2802,26 @@ export class Builder {
       // Inject JAVA_HOME from TurboCat config so mvn works even
       // when the system PATH does not include a JDK.
       const javaHome = await getTomcat().findJavaHome();
+      const mavenHome = vscode.workspace
+        .getConfiguration("turbocat")
+        .get<string>("turbocat.mavenHome", "");
       const mvnEnv: Record<string, string> = {};
       if (javaHome && !process.env.JAVA_HOME) {
         mvnEnv["JAVA_HOME"] = javaHome;
         getLogger().info(`Using JAVA_HOME=${javaHome} for Maven build`);
       }
+      if (mavenHome && !process.env.MAVEN_HOME) {
+        mvnEnv["MAVEN_HOME"] = mavenHome;
+      }
+
+      // Use absolute mvn path when mavenHome is configured
+      const mvnCmd = mavenHome
+        ? path.join(mavenHome, "bin", `mvn${process.platform === "win32" ? ".cmd" : ""}`)
+        : "mvn";
+      getLogger().info(`Maven command: ${mvnCmd} clean package`);
+
       await this.executeCommand(
-        `mvn clean package`,
+        `${mvnCmd} clean package`,
         projectDir,
         Object.keys(mvnEnv).length ? mvnEnv : undefined,
       );
@@ -3050,6 +3073,25 @@ export class Builder {
         }
       }
     }
+  }
+
+  /**
+   * Count files recursively (helper for pre-built deploy verification).
+   */
+  private countFilesRecursive(dir: string): number {
+    if (!fs.existsSync(dir)) {
+      return 0;
+    }
+    let count = 0;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        count += this.countFilesRecursive(path.join(dir, entry.name));
+      } else {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**

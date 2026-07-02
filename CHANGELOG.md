@@ -2,17 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1]
+### Fixed
+- **PreBuilt deploy**: replaced fragile `copyDirectorySync` with robust `brutalSync` for class deployment, and added post-copy verification that logs a warning if no class files were deployed.
+- **Smart deploy pause/resume visibility**: pause and resume events now log at WARN level so they are always visible regardless of log level configuration.
+- **Maven Home**: added `turbocat.mavenHome` setting for specifying the Maven installation path; `mavenDeploy` now uses the absolute `mvn` path when configured.
+- **Maven environment**: `mavenDeploy` now injects `MAVEN_HOME` into the subprocess when configured, in addition to `JAVA_HOME`.
+- **Smart deploy pause edge case**: fixed a bug where early returns (e.g., missing Tomcat home) would leave smart deploy permanently disabled by wrapping all exit paths in a unified `try/finally`.
+
 ## [1.5.0]
 ### Added
-- **Smart deploy pause during manual deploy**: Smart deploy file watchers are now automatically paused when a manual deployment starts, and restored when it finishes (success, failure, or early exit). Prevents watcher conflicts during full deployments.
+- **Smart deploy pause during manual deploy**: Smart deploy file watchers are now automatically paused when a manual deployment starts, and restored when it finishes — regardless of success, failure, or early exit. Pause/resume events are logged at WARN level so they are always visible.
 - **Workspace-level JAVA_HOME**: new `turbocat.workspaceJavaHome` setting (`scope: "window"`) allows per-project JDK overrides. Takes precedence over the machine-level `turbocat.javaHome`.
+- **Maven Home configuration**: new `turbocat.mavenHome` setting (`scope: "machine"`) for specifying the Maven installation path. When set, uses `<mavenHome>/bin/mvn` instead of relying on the system PATH.
 - **Eclipse WTP support**: `detectProjectStructure` now parses `.settings/org.eclipse.wst.common.component` to extract deployment mappings (web root, source roots, dependency libraries) for Eclipse WTP projects.
 - **Smart deploy visibility warning**: when `turbocat.showSmartDeployLog` is `false`, a warning is shown on initialization so users know debug details are hidden.
 
 ### Fixed
-- **PreBuilt deploy bug**: removed a destructive resources sync step that was deleting class files immediately after they were copied.
-- **Maven without JAVA_HOME**: `mavenDeploy` now injects `JAVA_HOME` from TurboCat's detected JDK into the `mvn` subprocess when the system environment lacks it.
+- **PreBuilt deploy**: replaced fragile `copyDirectorySync` with robust `brutalSync` for class deployment, and added post-copy verification that logs a warning if no class files were deployed.
+- **Maven without JAVA_HOME**: `mavenDeploy` now injects `JAVA_HOME` (and `MAVEN_HOME` when configured) into the `mvn` subprocess when the system environment lacks them.
 - **Smart deploy log visibility**: when `showSmartDeployLog` is `false`, only `DEBUG` messages are now suppressed; `INFO`-level deployment confirmations remain visible (previously all messages below `WARN` were hidden).
+- **Smart deploy pause edge case**: fixed a bug where early returns (e.g., missing Tomcat home or webapps root) would leave smart deploy permanently disabled by ensuring all exit paths go through the unified `try/finally` that restores the previous state.
 
 ## [1.4.0]
 ### Added
