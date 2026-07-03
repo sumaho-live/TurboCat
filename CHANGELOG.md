@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.4]
+### Fixed
+- **Eclipse PreBuilt missing**: `collectBuildCandidates` was missing the `.classpath` + `bin/` detection branch, so PreBuilt never appeared for Eclipse projects. Added proper detection with dedup against Maven PreBuilt.
+- **Eclipse Local compilation**: `localDeploy` now parses `.classpath` for `kind="lib"` entries and includes them in the javac classpath, resolving "package not found" errors for Eclipse projects using Local mode.
+- **Silent fallback when PreBuilt unavailable**: `resolveBuildType` now logs a WARN when the user's `preferredBuildType` is unavailable (e.g., PreBuilt set but `bin/` missing), instead of silently falling back to Local.
+
 ## [1.5.3]
 ### Added
 - **PreBuilt for Eclipse projects**: `PreBuilt` deployment now also works for Eclipse projects (`.classpath` + `bin/`). Uses the Eclipse compiler's existing output instead of re-running javac. Appears in QuickPick when `bin/` exists.

@@ -841,6 +841,36 @@ export class Builder {
   }
 
   /**
+   * Parse Eclipse .classpath to extract library JAR paths for javac classpath.
+   * Returns absolute paths to all kind="lib" entries.
+   */
+  private parseEclipseClasspathLibs(projectDir: string): string[] {
+    const classpathFile = path.join(projectDir, ".classpath");
+    if (!fs.existsSync(classpathFile)) {
+      return [];
+    }
+
+    try {
+      const xml = fs.readFileSync(classpathFile, "utf-8");
+      const libs: string[] = [];
+      const entryRegex = /<classpathentry\s+kind="lib"\s+path="([^"]+)"/gi;
+      let match: RegExpExecArray | null;
+      while ((match = entryRegex.exec(xml)) !== null) {
+        const rawPath = match[1].trim();
+        // Resolve relative paths against the project directory
+        const absPath = path.isAbsolute(rawPath)
+          ? rawPath
+          : path.join(projectDir, rawPath);
+        libs.push(absPath);
+      }
+      return libs;
+    } catch (error) {
+      smartLog.debug(`Failed to parse .classpath for libraries: ${error}`);
+      return [];
+    }
+  }
+
+  /**
    * Parse Eclipse WTP .settings/org.eclipse.wst.common.component to extract
    * deployment mappings (web root, source roots, context name).
    * Falls back to safe defaults when the file is missing or unparseable.
@@ -1345,6 +1375,14 @@ export class Builder {
       return preferred;
     }
 
+    // If user explicitly set a preferred type that isn't available, warn and fall back
+    if (preferred !== "Auto" && !candidates.includes(preferred)) {
+      smartLog.warn(
+        `Preferred build type "${preferred}" is not available for this project. ` +
+          `Available: ${candidates.join(", ")}. Falling back to selection.`,
+      );
+    }
+
     const configuredFallback = vscode.workspace
       .getConfiguration("turbocat")
       .get<"Local" | "Maven" | "Gradle" | "PreBuilt">(
@@ -1411,6 +1449,14 @@ export class Builder {
         path.join(projectDir, "target", "classes"),
       );
       if (hasPreBuiltClasses) {
+        candidates.push("PreBuilt");
+      }
+    }
+
+    // Eclipse project: PreBuilt available when .classpath + bin/ exist
+    if (fs.existsSync(path.join(projectDir, ".classpath"))) {
+      const hasEclipseBin = fs.existsSync(path.join(projectDir, "bin"));
+      if (hasEclipseBin && !candidates.includes("PreBuilt")) {
         candidates.push("PreBuilt");
       }
     }
@@ -2686,6 +2732,19 @@ export class Builder {
       }
 
       addClasspathDir(path.join(targetDir, "WEB-INF", "lib"));
+
+      // For Eclipse projects, also include libraries from .classpath
+      const eclipseLibs = this.parseEclipseClasspathLibs(projectDir);
+      for (const lib of eclipseLibs) {
+        if (fs.existsSync(lib)) {
+          classpathEntries.add(lib);
+        }
+      }
+      if (eclipseLibs.length > 0) {
+        smartLog.debug(
+          `Added ${eclipseLibs.length} Eclipse .classpath libraries to javac classpath`,
+        );
+      }
 
       const classpath = Array.from(classpathEntries).join(path.delimiter);
       const compileTargets = Array.from(javaFiles);
