@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import { getActiveWorkspaceFolder, getWorkspaceConfiguration } from '../core/workspace';
 
 interface LaunchConfigurationFile {
     version?: string;
@@ -24,13 +25,13 @@ export class DebugProfile {
     }
 
     public async generateJavaAttachProfile(): Promise<void> {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = getActiveWorkspaceFolder()?.uri.fsPath;
         if (!workspaceRoot) {
             vscode.window.showWarningMessage('TurboCat: No workspace folder found. Open a Java project first.');
             return;
         }
 
-        const debugPort = vscode.workspace.getConfiguration('turbocat').get<number>('debugPort', 8000);
+        const debugPort = getWorkspaceConfiguration().get<number>('debugPort', 8000);
         const vscodeDir = path.join(workspaceRoot, '.vscode');
         const launchPath = path.join(vscodeDir, 'launch.json');
 

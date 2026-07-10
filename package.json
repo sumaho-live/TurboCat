@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with project-local configuration isolation and smart file synchronization for Java web projects",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -52,18 +52,25 @@
     "onCommand:turbocat.clean",
     "onCommand:turbocat.startDebug",
     "onCommand:turbocat.toggleSmartDeploy",
-    "onCommand:turbocat.debugSmartDeploy",
-    "onCommand:turbocat.testCompiledWatcher",
     "onCommand:turbocat.generateDebugProfile",
     "onCommand:turbocat.initializeWorkspaceTomcatBase",
     "onCommand:turbocat.reload"
   ],
   "engines": {
-    "vscode": "^1.56.0",
-    "node": ">=14.16.0"
+    "vscode": "^1.99.0",
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.9.4",
+  "overrides": {
+    "minimatch@^9.0.0": "9.0.9",
+    "brace-expansion@^2.0.0": "2.1.2",
+    "mocha": {
+      "diff": "9.0.0",
+      "serialize-javascript": "7.0.7"
+    }
   },
   "files": [
-    "out/**/*",
+    "out/extension.js",
     "syntaxes/**/*",
     "resources/**/*",
     "language-configuration.json",
@@ -124,14 +131,6 @@
         "title": "TurboCat: Toggle Smart Deploy"
       },
       {
-        "command": "turbocat.debugSmartDeploy",
-        "title": "TurboCat: Debug Smart Deploy Status"
-      },
-      {
-        "command": "turbocat.testCompiledWatcher",
-        "title": "TurboCat: Test Compiled File Watcher"
-      },
-      {
         "command": "turbocat.generateDebugProfile",
         "title": "TurboCat: Generate Java Debug Profile"
       },
@@ -151,42 +150,19 @@
         "turbocat.logEncoding": {
           "type": "string",
           "default": "utf8",
-          "enum": [
+          "scope": "resource",
+          "examples": [
             "utf8",
-            "utf-8",
-            "utf16le",
-            "utf-16le",
-            "ucs2",
-            "ucs-2",
-            "ascii",
-            "latin1",
-            "iso-8859-1",
             "shift_jis",
-            "shift-jis",
-            "sjis",
-            "cp932",
-            "ms932",
-            "windows-31j",
-            "euc-jp",
-            "iso-2022-jp",
-            "gbk",
-            "gb2312",
-            "big5",
-            "base64",
-            "base64url",
-            "binary",
-            "hex"
+            "windows-1252",
+            "gb18030"
           ],
-          "markdownDescription": "Encoding for Tomcat logs. Choose a common encoding from the list or set `turbocat.logEncodingCustom` to override with any encoding supported by iconv-lite. If you are unsure, use `utf8`."
-        },
-        "turbocat.logEncodingCustom": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional override for Tomcat log encoding. Leave empty to use `turbocat.logEncoding`. Provide any encoding name supported by iconv-lite, such as `windows-1252`, `gb18030`, or `shift_jis`."
+          "markdownDescription": "Encoding for Tomcat logs. Accepts any encoding supported by iconv-lite. Set globally as a default or override it for a Workspace Folder."
         },
         "turbocat.compileEncoding": {
           "type": "string",
           "default": "UTF-8",
+          "scope": "resource",
           "description": "Encoding passed to javac during Local deployments. Set this to match your source file encoding when compiling without Maven or Gradle."
         },
         "turbocat.logLevel": {
@@ -201,26 +177,31 @@
             "ERROR"
           ],
           "default": "INFO",
+          "scope": "window",
           "description": "Minimum log level to display. Messages at or above this level will be shown."
         },
         "turbocat.showTimestamp": {
           "type": "boolean",
           "default": true,
+          "scope": "window",
           "description": "Whether to include timestamps in log messages."
         },
         "turbocat.autoShowOutput": {
           "type": "boolean",
           "default": true,
+          "scope": "window",
           "description": "Whether to automatically show the output panel when logs are written."
         },
         "turbocat.showSmartDeployLog": {
           "type": "boolean",
           "default": true,
+          "scope": "window",
           "description": "Show TurboCat smart deploy synchronization messages in the output panel."
         },
         "turbocat.syncBypassPatterns": {
           "type": "string",
           "default": "copy,副本,コピー,копия",
+          "scope": "resource",
           "description": "Comma-separated keywords; files containing these terms in the name are ignored by smart deploy synchronization (case-insensitive)."
         },
         "turbocat.smartDeploy": {
@@ -230,7 +211,7 @@
             "Smart"
           ],
           "default": "Disable",
-          "scope": "machine",
+          "scope": "resource",
           "description": "Toggle smart auto-deployment mode. When enabled, only changed files will be automatically deployed."
         },
         "turbocat.smartDeployDebounce": {
@@ -238,18 +219,8 @@
           "default": 300,
           "minimum": 100,
           "maximum": 60000,
+          "scope": "resource",
           "description": "Debounce time in milliseconds for smart deploy to prevent rapid successive deployments."
-        },
-        "turbocat.autoDeployBuildType": {
-          "type": "string",
-          "enum": [
-            "Local",
-            "Maven",
-            "Gradle",
-            "PreBuilt"
-          ],
-          "default": "Local",
-          "description": "Legacy fallback for the smart deploy watcher. Prefer turbocat.preferredBuildType for manual deployments."
         },
         "turbocat.preferredBuildType": {
           "type": "string",
@@ -261,31 +232,27 @@
             "PreBuilt"
           ],
           "default": "Auto",
+          "scope": "resource",
           "markdownDescription": "Override build detection when deploying. Auto uses heuristics; select Local, Maven, Gradle, or PreBuilt to force a specific pipeline. PreBuilt skips `mvn` and deploys `target/classes` (compiled by the Java Language Server) + static web resources — ideal when Maven is not on PATH."
         },
         "turbocat.deployPath": {
           "type": "string",
           "default": "",
-          "scope": "window",
+          "scope": "resource",
           "markdownDescription": "Override the Tomcat webapp directory relative to `webapps`. Leave empty to deploy using the workspace folder name. For nested folders omit the leading slash (e.g. `web/jmics`)."
         },
-        "turbocat.useWorkspaceTomcatBase": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "markdownDescription": "Use a workspace-local `CATALINA_BASE` under the project so Tomcat configuration, deployed apps, logs, work, and temp files are isolated from other workspaces."
-        },
-        "turbocat.workspaceTomcatBasePath": {
+        "turbocat.tomcatBase": {
           "type": "string",
           "default": ".vscode/turbocat",
-          "scope": "window",
-          "markdownDescription": "Workspace-relative path for TurboCat's project-local Tomcat base. Used only when `turbocat.useWorkspaceTomcatBase` is enabled."
+          "scope": "resource",
+          "markdownDescription": "Project CATALINA_BASE. Relative paths resolve from the Workspace Folder. Set globally as a default, override per project, or use an empty string to run directly from CATALINA_HOME."
         },
         "turbocat.debugPort": {
           "type": "number",
           "default": 8000,
           "minimum": 1024,
           "maximum": 49151,
+          "scope": "resource",
           "errorMessage": "Debug port must be between 1024-49151",
           "description": "The debug port number for the Tomcat server in debug mode, allowed range is 1024-49151."
         },
@@ -294,6 +261,7 @@
           "default": 8080,
           "minimum": 1024,
           "maximum": 49151,
+          "scope": "resource",
           "errorMessage": "Port must be between 1024-49151",
           "description": "The port number for the Tomcat server, allowed range is 1024-49151."
         },
@@ -302,43 +270,38 @@
           "default": 8005,
           "minimum": 1024,
           "maximum": 65535,
+          "scope": "resource",
           "errorMessage": "Shutdown port must be between 1024-65535",
           "markdownDescription": "The Tomcat shutdown port used for receiving the shutdown command. Must differ from `turbocat.port`. Set the Tomcat `server.xml` port to -1 manually if you need to disable the shutdown listener."
         },
         "turbocat.home": {
           "type": "string",
           "default": "",
-          "scope": "machine",
+          "scope": "resource",
           "description": "The path to the Apache Tomcat installation. If not set, the extension will try to find the Tomcat installation automatically."
         },
         "turbocat.javaHome": {
           "type": "string",
           "default": "",
-          "scope": "machine",
-          "description": "The path to the JDK installation (machine-level default). Set turbocat.workspaceJavaHome to override per-workspace. If not set, the extension will try to find the JDK automatically."
-        },
-        "turbocat.workspaceJavaHome": {
-          "type": "string",
-          "default": "",
-          "scope": "window",
-          "description": "Per-workspace JDK override. Takes precedence over turbocat.javaHome when set. Leave empty to use the machine-level setting."
+          "scope": "resource",
+          "description": "Path to the JDK. Set it globally as a default or override it in Workspace/Workspace Folder settings."
         },
         "turbocat.mavenHome": {
           "type": "string",
           "default": "",
-          "scope": "machine",
+          "scope": "resource",
           "description": "Path to the Maven installation. When set, uses \"<mavenHome>/bin/mvn\" instead of relying on the system PATH. Useful when mvn is not globally available."
         },
         "turbocat.tomcatEnvironment": {
           "type": "object",
           "default": {},
-          "scope": "machine",
+          "scope": "resource",
           "markdownDescription": "Environment variables to apply when launching Tomcat. Use this to add custom JVM parameters, for example:\n```json\n{\n  \"JAVA_TOOL_OPTIONS\": \"-Djava.awt.headless=true\"\n}\n```"
         },
         "turbocat.tomcatDebugEnvironment": {
           "type": "object",
           "default": {},
-          "scope": "machine",
+          "scope": "resource",
           "markdownDescription": "Environment variables to apply when launching Tomcat in debug mode. Use this to override or extend debug-specific JVM parameters without affecting normal starts."
         }
       }
@@ -351,9 +314,11 @@
     "watch": "tsc -watch -p ./",
     "compile-tests": "tsc -p ./tsconfig.test.json",
     "pretest": "npm run compile && npm run compile-tests && npm run lint",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src --ext .ts --max-warnings=0",
     "test": "node ./scripts/run-tests.js",
-    "coverage": "nyc --reporter=lcov npm test"
+    "test:e2e": "node ./scripts/run-tests.js",
+    "test:unit": "npm run compile-tests && mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js",
+    "coverage": "npm run compile-tests && nyc --include 'out/services/project/**/*.js' --include 'out/services/build/**/*.js' --include 'out/services/deployment/**/*.js' --exclude 'out/test/**' --exclude-after-remap=false --check-coverage --lines 85 --statements 85 --functions 75 --branches 60 --reporter=text --reporter=lcov mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js"
   },
   "devDependencies": {
     "@istanbuljs/nyc-config-typescript": "^1.0.2",
@@ -366,10 +331,10 @@
     "@typescript-eslint/eslint-plugin": "^8.29.0",
     "@typescript-eslint/parser": "^8.29.0",
     "@vscode/test-electron": "^2.4.1",
-    "@vscode/vsce": "^2.15.0",
+    "@vscode/vsce": "^3.9.2",
     "chai": "^4.5.0",
     "eslint": "^9.23.0",
-    "mocha": "^10.4.0",
+    "mocha": "^11.7.6",
     "sinon": "^17.0.1",
     "ts-loader": "^9.5.2",
     "typescript": "^5.7.3",

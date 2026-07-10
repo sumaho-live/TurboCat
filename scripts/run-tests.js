@@ -13,6 +13,7 @@ async function main() {
   const extensionTestsPath = path.resolve(__dirname, '..', 'out', 'test', 'suite', 'index');
 
   await runTests({
+    version: process.env.VSCODE_TEST_VERSION || '1.99.3',
     extensionDevelopmentPath,
     extensionTestsPath
   });

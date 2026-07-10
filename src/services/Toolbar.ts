@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { Tomcat } from './Tomcat';
 import { Logger } from './Logger';
+import { getWorkspaceConfiguration } from '../core/workspace';
 
 export class Toolbar {
     private static instance: Toolbar;
@@ -114,7 +115,7 @@ export class Toolbar {
      * Update Smart Deploy button based on current configuration
      */
     private updateSmartDeployButton(): void {
-        const smartDeploy = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy', 'Disable');
+        const smartDeploy = getWorkspaceConfiguration().get<string>('smartDeploy', 'Disable');
         this.isSmartDeployEnabled = smartDeploy === 'Smart';
         
         if (this.isSmartDeployEnabled) {

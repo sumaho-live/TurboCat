@@ -7,16 +7,19 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import iconv from "iconv-lite";
+import { getWorkspaceConfiguration } from "../core/workspace";
+import { getActiveWorkspaceFolder } from "../core/workspace";
 //import { Builder } from './Builder';
 
 type LogContext = "general" | "smartDeploy";
 
 export class Logger {
-  private static instance: Logger;
+  private static readonly instances = new Map<string, Logger>();
+  private static readonly outputChannels = new Map<string, vscode.OutputChannel>();
+  private readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
   private tomcatHome: string;
   private runtimeBase: string;
   private outputChannel: vscode.OutputChannel;
-  private statusBarItem?: vscode.StatusBarItem;
 
   private accessLogWatcher?: fs.FSWatcher;
   private unifiedLogWatcher?: fs.FSWatcher; // Single watcher for log directory monitoring
@@ -41,31 +44,31 @@ export class Logger {
   /**
    * Private constructor - initializes configuration and output channels
    */
-  private constructor() {
-    this.tomcatHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.home", "");
+  private constructor(workspaceFolder?: vscode.WorkspaceFolder) {
+    this.workspaceFolder = workspaceFolder;
+    const config = this.getConfiguration();
+    this.tomcatHome = config.get<string>("home", "");
     this.runtimeBase = this.tomcatHome;
     //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
-    const config = vscode.workspace.getConfiguration("turbocat");
     this.logLevel = (config.get<string>("logLevel", "INFO") || "INFO")
       .trim()
       .toUpperCase();
     if (!(this.logLevel in this.logLevels)) {
       this.logLevel = "INFO";
     }
-    this.showTimestamp = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.showTimestamp", true);
-    this.autoShowOutput = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.autoShowOutput", true);
-    this.showSmartDeployLog = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.showSmartDeployLog", true);
+    this.showTimestamp = config.get<boolean>("showTimestamp", true);
+    this.autoShowOutput = config.get<boolean>("autoShowOutput", true);
+    this.showSmartDeployLog = config.get<boolean>("showSmartDeployLog", true);
 
     // Single output channel for all logs
-    this.outputChannel = vscode.window.createOutputChannel("TurboCat", "log");
+    const channelName = workspaceFolder
+      ? `TurboCat • ${workspaceFolder.name}`
+      : "TurboCat";
+    const channelKey = workspaceFolder?.uri.toString() ?? "__global__";
+    this.outputChannel =
+      Logger.outputChannels.get(channelKey) ??
+      vscode.window.createOutputChannel(channelName, "log");
+    Logger.outputChannels.set(channelKey, this.outputChannel);
 
     this.logEncoding = this.resolveLogEncoding();
   }
@@ -73,11 +76,48 @@ export class Logger {
   /**
    * Get singleton Logger instance
    */
-  public static getInstance(): Logger {
-    if (!Logger.instance) {
-      Logger.instance = new Logger();
+  public static getInstance(resource?: vscode.Uri): Logger {
+    const workspaceFolder = getActiveWorkspaceFolder(resource);
+    const key = workspaceFolder?.uri.toString() ?? "__global__";
+    let instance = Logger.instances.get(key);
+    if (!instance) {
+      instance = new Logger(workspaceFolder);
+      Logger.instances.set(key, instance);
     }
-    return Logger.instance;
+    return instance;
+  }
+
+  public static getAllInstances(): readonly Logger[] {
+    return [...Logger.instances.values()];
+  }
+
+  public static removeInstance(resource: vscode.Uri): void {
+    const key = resource.toString();
+    Logger.instances.get(key)?.releaseRuntime();
+    Logger.instances.delete(key);
+  }
+
+  public static disposeAll(): void {
+    for (const instance of Logger.instances.values()) {
+      instance.releaseRuntime();
+    }
+    for (const channel of Logger.outputChannels.values()) {
+      channel.dispose();
+    }
+    Logger.instances.clear();
+    Logger.outputChannels.clear();
+  }
+
+  public static clearInstancesForTests(): void {
+    // Tests replace workspace folders repeatedly inside one extension host.
+    // Do not dispose VS Code output channels here because recreating a channel
+    // with the same name after disposal is not supported by older hosts.
+    Logger.instances.clear();
+    Logger.outputChannels.clear();
+  }
+
+  private getConfiguration(): vscode.WorkspaceConfiguration {
+    return getWorkspaceConfiguration("turbocat", this.workspaceFolder?.uri);
   }
 
   /**
@@ -91,23 +131,19 @@ export class Logger {
    * Update configuration from workspace settings
    */
   public updateConfig(): void {
-    this.tomcatHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.home", "");
+    const config = this.getConfiguration();
+    this.tomcatHome = config.get<string>("home", "");
     if (!this.runtimeBase) {
       this.runtimeBase = this.tomcatHome;
     }
     //this.autoDeployMode = vscode.workspace.getConfiguration().get<string>('turbocat.autoDeployMode', 'Disable');
-    const config = vscode.workspace.getConfiguration("turbocat");
     this.logLevel = (config.get<string>("logLevel", "INFO") || "INFO")
       .trim()
       .toUpperCase();
     if (!(this.logLevel in this.logLevels)) {
       this.logLevel = "INFO";
     }
-    this.showTimestamp = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.showTimestamp", true);
+    this.showTimestamp = config.get<boolean>("showTimestamp", true);
     const previousEncoding = this.logEncoding;
     this.logEncoding = this.resolveLogEncoding();
     if (previousEncoding !== this.logEncoding) {
@@ -115,24 +151,26 @@ export class Logger {
       this.partialLines.clear();
       this.accessLogOffsets.clear();
     }
-    this.autoShowOutput = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.autoShowOutput", true);
-    this.showSmartDeployLog = vscode.workspace
-      .getConfiguration()
-      .get<boolean>("turbocat.showSmartDeployLog", true);
+    this.autoShowOutput = config.get<boolean>("autoShowOutput", true);
+    this.showSmartDeployLog = config.get<boolean>("showSmartDeployLog", true);
   }
 
   /**
    * Clean up all resources and watchers
    */
   public deactivate(): void {
-    this.outputChannel.dispose();
-    this.statusBarItem?.dispose();
+    this.releaseRuntime();
+  }
+
+  public releaseRuntime(): void {
     if (this.unifiedLogWatcher) {
       this.unifiedLogWatcher.close();
+      this.unifiedLogWatcher = undefined;
     }
     this.accessLogWatcher?.close();
+    this.accessLogWatcher = undefined;
+    this.partialLines.clear();
+    this.accessLogOffsets.clear();
   }
 
   /**
@@ -424,15 +462,8 @@ export class Logger {
   }
 
   private resolveLogEncoding(): string {
-    const config = vscode.workspace.getConfiguration();
-    const custom = (
-      config.get<string>("turbocat.logEncodingCustom", "") ?? ""
-    ).trim();
-    if (custom) {
-      return custom;
-    }
-
-    return config.get<string>("turbocat.logEncoding", "utf8");
+    const config = this.getConfiguration();
+    return config.get<string>("logEncoding", "utf8");
   }
 
   /**

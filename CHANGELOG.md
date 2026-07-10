@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-07-11
+
+### Added
+- **Multi-project runtime isolation**: every Workspace Folder now owns an independent Tomcat, Builder, Logger, watcher set, deployment state, and output channel through `ProjectRuntimeRegistry`.
+- **Tomcat process ownership**: TurboCat persists the owning workspace, PID, `CATALINA_HOME`, `CATALINA_BASE`, ports, and launch mode before it manages a server process.
+- **Native configuration layering**: project settings now use VS Code User → Workspace → Workspace Folder precedence without separate workspace override options.
+- **Fast unit-test layer and coverage gate**: extracted project/build/deployment modules run without Electron and enforce coverage thresholds in CI.
+- **Dedicated CI workflow**: pull requests and main now run lint, compilation, coverage, fixed-version extension tests, and VSIX packaging.
+
+### Changed
+- Replaced `turbocat.useWorkspaceTomcatBase` and `turbocat.workspaceTomcatBasePath` with the single `turbocat.tomcatBase` setting. An empty value selects `CATALINA_HOME` directly.
+- Consolidated custom log encodings into `turbocat.logEncoding`; any iconv-lite encoding name is accepted.
+- Removed the separate `workspaceJavaHome` and legacy `autoDeployBuildType` settings. Existing User, Workspace, and Workspace Folder values migrate automatically.
+- Scoped project-sensitive settings as VS Code `resource` settings so Tomcat/JDK paths, ports, build modes, environments, deployment paths, and Smart Deploy behavior can differ per folder.
+- Split project detection, Eclipse metadata parsing, glob conversion, build command execution, and directory synchronization out of `Builder`.
+- Maven, Gradle, and javac now execute with argument arrays and `shell: false`, preserving paths with spaces and avoiding shell interpolation.
+- Deployment directory synchronization and primary deployment writes now use asynchronous filesystem APIs.
+- Standardized development and CI on Node.js 20+, npm, and VS Code 1.99.3 extension tests.
+- Marketplace publishing now runs only for version tags or manual dispatch; ordinary pushes run CI without publishing.
+- Reduced VSIX contents to production files only and added the missing light/dark command icons.
+
+### Fixed
+- Closing or removing one project no longer stops a Tomcat process launched by another project.
+- Forced termination no longer searches by port or process name; it only targets a live PID owned by the current Workspace Folder.
+- Configuration changes are routed only to affected project services and port updates retain their previous values for correct restart decisions.
+- Project removal and re-addition now recreates a clean runtime without leaking watchers or disposed output channels.
+- Fixed the previous coverage script, which reported 0% because compiled JavaScript was not instrumented correctly.
+
+### Security
+- Updated production and development dependency trees and added compatible overrides; `npm audit --omit=dev` reports zero vulnerabilities.
+- Removed shell-based Maven and Gradle command construction.
+
 ## [1.5.4]
 ### Fixed
 - **Eclipse PreBuilt missing**: `collectBuildCandidates` was missing the `.classpath` + `bin/` detection branch, so PreBuilt never appeared for Eclipse projects. Added proper detection with dedup against Maven PreBuilt.

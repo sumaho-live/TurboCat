@@ -23,8 +23,7 @@ Project B:
 2. Open Settings and configure:
    - `turbocat.home` = your Tomcat installation path.
    - `turbocat.javaHome` = your JDK path.
-   - `turbocat.useWorkspaceTomcatBase` = `true`.
-   - `turbocat.workspaceTomcatBasePath` = `.vscode/turbocat`.
+   - `turbocat.tomcatBase` = `.vscode/turbocat`.
 3. Run `TurboCat: Initialize Workspace Tomcat Config`.
 4. Confirm these folders exist:
 
@@ -185,7 +184,7 @@ Expected result:
 - Only one Tomcat instance should run at a time unless you intentionally configure non-conflicting ports and separate runtime bases.
 
 ## Global Tomcat Mode
-1. Set `turbocat.useWorkspaceTomcatBase` = `false`.
+1. Set `turbocat.tomcatBase` to an empty string.
 2. Run `TurboCat: Start`.
 3. Run `TurboCat: Deploy`.
 4. Inspect `<tomcatHome>/webapps` and `<tomcatHome>/conf/server.xml`.

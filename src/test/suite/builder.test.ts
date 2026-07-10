@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { Builder } from '../../services/Builder';
 import { Tomcat } from '../../services/Tomcat';
+import { Logger } from '../../services/Logger';
 
 describe('Builder Tests', () => {
   let builder: Builder;
@@ -15,8 +16,9 @@ describe('Builder Tests', () => {
   beforeEach(() => {
     sandbox = sinon.createSandbox();
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-test-'));
-    (Builder as unknown as { instance?: Builder }).instance = undefined;
-    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
+    Builder.clearInstancesForTests();
+    Tomcat.clearInstancesForTests();
+    Logger.clearInstancesForTests();
     sandbox.stub(vscode.workspace, 'workspaceFolders').value([{
       uri: vscode.Uri.file(workspaceRoot),
       name: path.basename(workspaceRoot),
@@ -28,8 +30,9 @@ describe('Builder Tests', () => {
   afterEach(() => {
     sandbox.restore();
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
-    (Builder as unknown as { instance?: Builder }).instance = undefined;
-    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
+    Builder.clearInstancesForTests();
+    Tomcat.clearInstancesForTests();
+    Logger.clearInstancesForTests();
   });
 
   describe('isJavaEEProject()', () => {

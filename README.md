@@ -37,12 +37,10 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
 | `turbocat.syncBypassPatterns` | Filename keywords to skip syncing | Comma-separated list, default catches “copy” variants |
 | `turbocat.showSmartDeployLog` | Toggle smart deploy info/debug logs | Defaults to true; set false to suppress automatic sync chatter |
-| `turbocat.logEncoding` / `turbocat.logEncodingCustom` | Tomcat log decoding | Pick common encodings or enter any iconv-lite name (e.g. `shift_jis`) for accurate output |
-| `turbocat.autoDeployBuildType` | Legacy fallback for smart deploy | Only used by background file watchers |
+| `turbocat.logEncoding` | Tomcat log decoding | Accepts any iconv-lite encoding name, such as `shift_jis` or `gb18030` |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
-| `turbocat.useWorkspaceTomcatBase` | Turn on workspace-local Tomcat config isolation | Enabled by default; uses Tomcat's `CATALINA_BASE` support so each project gets its own runtime base |
-| `turbocat.workspaceTomcatBasePath` | Workspace Tomcat base location | Defaults to `.vscode/turbocat` |
+| `turbocat.tomcatBase` | Project `CATALINA_BASE` | Defaults to `.vscode/turbocat`; set to an empty string to use `CATALINA_HOME` directly |
 | `turbocat.tomcatEnvironment` | Environment variables for standard starts | JSON object of key/value pairs applied to normal `TurboCat: Start` runs |
 | `turbocat.tomcatDebugEnvironment` | Debug-only environment overrides | Applied exclusively to `TurboCat: Start in Debug Mode`, leaving normal starts untouched |
 
@@ -61,7 +59,13 @@ TurboCat uses your configured Tomcat installation as `CATALINA_HOME`, but by def
 
 On first use, TurboCat copies missing files from `<tomcatHome>/conf` into `.vscode/turbocat/conf` and preserves files that already exist. Port updates, deployments, clean operations, and log watching all use the workspace base, so one project can change `server.xml` or deploy a webapp without affecting another project that shares the same Tomcat install.
 
-Set `turbocat.useWorkspaceTomcatBase` to `false` to use the Tomcat installation directory directly.
+Set `turbocat.tomcatBase` to an empty string to use the Tomcat installation directory directly.
+
+## Multi-project workspaces
+
+TurboCat creates an independent runtime for every VS Code Workspace Folder. Each project owns its Tomcat process record, Builder, file watchers, log channel, ports, and `CATALINA_BASE`. Commands are routed using the active editor, while save events are routed using the saved document's folder. Closing one window or removing one Workspace Folder releases only that project's extension resources and never stops another project's Tomcat.
+
+Project settings use VS Code's native precedence. Configure a value once in User settings, then override the same key in Workspace or Workspace Folder settings when a project needs a different Tomcat, JDK, port, build type, or deployment path. Separate `workspace*` override settings are no longer needed.
 
 ## Project Types
 TurboCat autodetects common Java web structures:
@@ -109,7 +113,7 @@ Mappings that end in `.class` also teach Smart Deploy where to watch for compile
 - Adjust `turbocat.logLevel` to control the verbosity of extension messages; setting to `INFO` will hide background `DEBUG` chatter.
 - Extension ports are automatically synchronized with Tomcat's `server.xml` before every start, ensuring your VS Code settings are always applied.
 - With workspace isolation enabled, logs are read from `.vscode/turbocat/logs` and port changes are written to `.vscode/turbocat/conf/server.xml`.
-- Adjust `turbocat.logEncoding` or `turbocat.logEncodingCustom` when Tomcat writes logs in encodings such as Shift_JIS or GBK.
+- Adjust `turbocat.logEncoding` when Tomcat writes logs in encodings such as Shift_JIS or GBK.
 - Set `turbocat.showSmartDeployLog` to `false` if you want to hide Smart Deploy chatter while keeping warnings and errors.
 
 ## Getting Help

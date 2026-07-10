@@ -34,7 +34,7 @@ out/                      # Compiled webpack bundle
 ```
 
 ## Coding Guidelines
-- Favour the existing singleton services for shared state.
+- Resolve project services through `ProjectRuntimeRegistry`. Runtime services are keyed by Workspace Folder URI; never add mutable cross-project state to a module-level singleton.
 - Keep asynchronous flows resilient: catch/handle errors and surface them through the logger.
 - When introducing new status-bar or command behaviour, route changes via `Toolbar`/`extension.ts`.
 - Runtime paths should go through `Tomcat.getCatalinaBase()` / `Tomcat.getWebappsRoot()` so workspace-local Tomcat bases and global Tomcat installs behave consistently.

@@ -11,7 +11,7 @@ describe('Logger Tests', () => {
   beforeEach(() => {
     sandbox = sinon.createSandbox();
     lines = [];
-    (Logger as unknown as { instance?: Logger }).instance = undefined;
+    Logger.clearInstancesForTests();
     sandbox.stub(vscode.window, 'createOutputChannel').returns({
       name: 'TurboCat',
       logLevel: vscode.LogLevel.Info,
@@ -28,9 +28,8 @@ describe('Logger Tests', () => {
   });
 
   afterEach(() => {
-    logger.deactivate();
+    Logger.clearInstancesForTests();
     sandbox.restore();
-    (Logger as unknown as { instance?: Logger }).instance = undefined;
   });
 
   it('formats extension logs with TurboCat prefix', () => {

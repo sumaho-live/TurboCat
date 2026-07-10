@@ -1,26 +1,31 @@
 # TurboCat Architecture
 
-The TurboCat extension is organised around a small set of singleton services that collaborate through the activation entry point in `src/core/extension.ts`.
+The TurboCat extension is organised around a project runtime registry. Every Workspace Folder receives an independent service graph coordinated by `src/core/extension.ts`.
 
 ## Module Map
 
 ```
 src/
 ├─ core/
-│  └─ extension.ts        # Extension activation / deactivation, command registration
+│  ├─ extension.ts        # Extension activation / deactivation, command routing
+│  ├─ ProjectRuntimeRegistry.ts # Per-folder service ownership
+│  └─ workspace.ts        # Resource-to-folder and scoped configuration helpers
 ├─ services/
 │  ├─ Tomcat.ts           # Tomcat lifecycle, configuration, and manager API integration
 │  ├─ TomcatBase.ts       # Workspace-local CATALINA_BASE creation and config isolation
 │  ├─ Builder.ts          # Deployment orchestration and smart deploy watchers
 │  ├─ Logger.ts           # Unified logging stream and Tomcat log watchers
 │  ├─ Toolbar.ts          # Status-bar controls driven by Tomcat state
-│  └─ DebugProfile.ts     # Guided generation of VS Code launch configurations
+│  ├─ DebugProfile.ts     # Guided generation of VS Code launch configurations
+│  ├─ build/CommandRunner.ts             # Shell-free build execution
+│  ├─ deployment/DirectorySynchronizer.ts # Async clean directory mirroring
+│  └─ project/            # Project detection, Eclipse metadata, glob parsing
 └─ utils/
    ├─ deploymentPath.ts   # Shared deployment path normalisation
    └─ syntax.ts           # Output channel syntax colouring rules
 ```
 
-All services follow the singleton pattern (`getInstance()`) to ensure there is a single source of truth for workspace configuration and runtime state.
+`Builder`, `Tomcat`, and `Logger` expose `getInstance(resource)` factories backed by Workspace Folder URI maps. They are singletons only within one project, not across the extension host. This prevents ports, processes, watchers, deployment targets, and log streams from leaking between projects.
 
 ## Responsibilities
 
@@ -28,14 +33,15 @@ All services follow the singleton pattern (`getInstance()`) to ensure there is a
 - Discovers and validates Tomcat/JDK locations.
 - Launches, stops, cleans, and reloads the server.
 - Updates `server.xml` on port changes and writes back to workspace settings.
-- Uses a workspace-local `CATALINA_BASE` when `turbocat.useWorkspaceTomcatBase` is enabled.
+- Uses the project-scoped `turbocat.tomcatBase` as `CATALINA_BASE`.
+- Persists process ownership under that base and refuses to stop or force-kill a process owned by another project.
 - Streams Tomcat process output to the logger.
 - Respects the workspace-level `turbocat.deployPath` override when resolving the active webapp.
 - Waits for start/stop transitions to finish so reloads never collide with lingering JVMs.
 - Exposes helpers to restart Tomcat in debug mode on demand before VS Code attaches.
 
 ### TomcatBase Service
-- Resolves the workspace Tomcat base path from `turbocat.workspaceTomcatBasePath`.
+- Resolves the workspace Tomcat base path from `turbocat.tomcatBase`.
 - Creates `conf`, `logs`, `temp`, `work`, and `webapps` under the workspace base.
 - Copies missing config files from the shared Tomcat installation without overwriting project-specific files.
 - Lets the shared Tomcat installation remain `CATALINA_HOME` while the project runtime directory becomes `CATALINA_BASE`.

@@ -15,12 +15,17 @@ import * as net from "net";
 import iconv from "iconv-lite";
 import { normalizeDeploymentPath } from "../utils/deploymentPath";
 import { TomcatBase } from "./TomcatBase";
+import { ProcessOwnership } from "./ProcessOwnership";
+import {
+  getActiveWorkspaceFolder,
+  getWorkspaceConfiguration,
+} from "../core/workspace";
 
 const execAsync = promisify(exec);
-const logger = Logger.getInstance();
-
 export class Tomcat {
-  private static instance: Tomcat;
+  private static readonly instances = new Map<string, Tomcat>();
+  private readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
+  private readonly logger: Logger;
   private tomcatHome: string;
   private javaHome: string;
   private port: number;
@@ -31,25 +36,22 @@ export class Tomcat {
   private tomcatDebugEnvironment: Record<string, string>;
   private lastStartMode: "run" | "debug";
   private deployPath: string;
+  private readonly processOwnership = new ProcessOwnership();
+  private activeCatalinaBase: string | null = null;
 
   private readonly PORT_RANGE = { min: 1024, max: 49151 };
 
   /**
    * Private constructor - initialize configuration
    */
-  private constructor() {
-    this.tomcatHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.home", "");
-    this.javaHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.javaHome", "");
-    this.port = vscode.workspace
-      .getConfiguration()
-      .get<number>("turbocat.port", 8080);
-    this.shutdownPort = vscode.workspace
-      .getConfiguration()
-      .get<number>("turbocat.shutdownPort", 8005);
+  private constructor(workspaceFolder?: vscode.WorkspaceFolder) {
+    this.workspaceFolder = workspaceFolder;
+    this.logger = Logger.getInstance(workspaceFolder?.uri);
+    const config = this.getConfiguration();
+    this.tomcatHome = config.get<string>("home", "");
+    this.javaHome = config.get<string>("javaHome", "");
+    this.port = config.get<number>("port", 8080);
+    this.shutdownPort = config.get<number>("shutdownPort", 8005);
     this.tomcatEnvironment = this.loadTomcatEnvironment(
       "turbocat.tomcatEnvironment",
     );
@@ -63,18 +65,49 @@ export class Tomcat {
   /**
    * Get singleton Tomcat instance
    */
-  public static getInstance(): Tomcat {
-    if (!Tomcat.instance) {
-      Tomcat.instance = new Tomcat();
+  public static getInstance(resource?: vscode.Uri): Tomcat {
+    const workspaceFolder = getActiveWorkspaceFolder(resource);
+    const key = workspaceFolder?.uri.toString() ?? "__global__";
+    let instance = Tomcat.instances.get(key);
+    if (!instance) {
+      instance = new Tomcat(workspaceFolder);
+      Tomcat.instances.set(key, instance);
     }
-    return Tomcat.instance;
+    return instance;
+  }
+
+  public static getAllInstances(): readonly Tomcat[] {
+    return [...Tomcat.instances.values()];
+  }
+
+  public static removeInstance(resource: vscode.Uri): void {
+    Tomcat.instances.delete(resource.toString());
+  }
+
+  public static clearInstancesForTests(): void {
+    Tomcat.instances.clear();
+  }
+
+  private getConfiguration(): vscode.WorkspaceConfiguration {
+    return getWorkspaceConfiguration("turbocat", this.workspaceFolder?.uri);
+  }
+
+  private getWorkspaceUri(): string | undefined {
+    return this.workspaceFolder?.uri.toString();
   }
 
   /**
    * Clean up resources on extension deactivation
    */
   public async deactivate(): Promise<void> {
-    await this.stop(false).catch(() => undefined);
+    // Tomcat is a project-owned development server, not an extension resource.
+    // Closing one VS Code window must never stop a server owned by that project
+    // (or, worse, a server from another window that happens to share a port).
+    this.tomcatProcess?.stdout?.removeAllListeners();
+    this.tomcatProcess?.stderr?.removeAllListeners();
+    this.tomcatProcess?.stdout?.resume();
+    this.tomcatProcess?.stderr?.resume();
+    this.tomcatProcess = null;
   }
 
   /**
@@ -82,18 +115,11 @@ export class Tomcat {
    */
   public updateConfig(): void {
     const previousDeployPath = this.deployPath;
-    this.tomcatHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.home", "");
-    this.javaHome = vscode.workspace
-      .getConfiguration()
-      .get<string>("turbocat.javaHome", "");
-    this.port = vscode.workspace
-      .getConfiguration()
-      .get<number>("turbocat.port", 8080);
-    this.shutdownPort = vscode.workspace
-      .getConfiguration()
-      .get<number>("turbocat.shutdownPort", 8005);
+    const config = this.getConfiguration();
+    this.tomcatHome = config.get<string>("home", "");
+    this.javaHome = config.get<string>("javaHome", "");
+    this.port = config.get<number>("port", 8080);
+    this.shutdownPort = config.get<number>("shutdownPort", 8005);
     this.tomcatEnvironment = this.loadTomcatEnvironment(
       "turbocat.tomcatEnvironment",
     );
@@ -107,9 +133,10 @@ export class Tomcat {
   }
 
   private loadTomcatEnvironment(settingKey: string): Record<string, string> {
-    const configured = vscode.workspace
-      .getConfiguration()
-      .get<Record<string, unknown>>(settingKey, {});
+    const configured = this.getConfiguration().get<Record<string, unknown>>(
+      settingKey.replace(/^turbocat\./, ""),
+      {},
+    );
     if (!configured || typeof configured !== "object") {
       return {};
     }
@@ -148,9 +175,9 @@ export class Tomcat {
     }
 
     // Try to derive a default app name from the workspace
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const appName = path.basename(workspaceFolders[0].uri.fsPath);
+    const workspaceFolder = this.workspaceFolder;
+    if (workspaceFolder) {
+      const appName = path.basename(workspaceFolder.uri.fsPath);
       this.currentAppName = appName; // Cache it for future use
       return appName;
     }
@@ -174,14 +201,16 @@ export class Tomcat {
       return false;
     }
     const catalinaBase = await this.getCatalinaBase(tomcatHome);
-    Logger.getInstance().setRuntimeBase(catalinaBase);
+    this.logger.setRuntimeBase(catalinaBase);
 
     // Ensure Tomcat is stopped before starting
-    await this.ensureTomcatStopped(false);
+    if (!(await this.ensureTomcatStopped(false))) {
+      return false;
+    }
 
     // Sync ports to server.xml before starting
     await this.updatePort().catch((err) =>
-      logger.error(`Failed to sync ports: ${err}`, false),
+      this.logger.error(`Failed to sync ports: ${err}`, false),
     );
 
     try {
@@ -192,17 +221,17 @@ export class Tomcat {
       const started = await this.waitForServerState("running");
       if (started) {
         this.lastStartMode = "run";
-        logger.success("Tomcat started successfully", showMessages);
+        this.logger.success("Tomcat started successfully", showMessages);
         return true;
       }
 
-      logger.warn(
+      this.logger.warn(
         "Tomcat start command completed, but the server did not begin listening in time.",
         showMessages,
       );
       return false;
     } catch (err) {
-      logger.error("Failed to start Tomcat:", showMessages, err as string);
+      this.logger.error("Failed to start Tomcat:", showMessages, err as string);
       return false;
     }
   }
@@ -217,20 +246,23 @@ export class Tomcat {
       return false;
     }
     const catalinaBase = await this.getCatalinaBase(tomcatHome);
-    Logger.getInstance().setRuntimeBase(catalinaBase);
+    this.logger.setRuntimeBase(catalinaBase);
 
     // Ensure Tomcat is stopped before starting in debug mode
-    await this.ensureTomcatStopped(false);
+    if (!(await this.ensureTomcatStopped(false))) {
+      return false;
+    }
 
     // Sync ports to server.xml before starting
     await this.updatePort().catch((err) =>
-      logger.error(`Failed to sync ports: ${err}`, false),
+      this.logger.error(`Failed to sync ports: ${err}`, false),
     );
 
     try {
-      const debugPort = vscode.workspace
-        .getConfiguration()
-        .get<number>("turbocat.debugPort", 8000);
+      const debugPort = this.getConfiguration().get<number>(
+        "debugPort",
+        8000,
+      );
       await this.executeTomcatCommand("start", tomcatHome, javaHome, {
         catalinaBase,
         debug: true,
@@ -240,20 +272,20 @@ export class Tomcat {
       const started = await this.waitForServerState("running");
       if (started) {
         this.lastStartMode = "debug";
-        logger.success(
+        this.logger.success(
           `Tomcat started in debug mode on port ${debugPort}`,
           showMessages,
         );
         return true;
       }
 
-      logger.warn(
+      this.logger.warn(
         "Tomcat debug start request timed out before the server began listening.",
         showMessages,
       );
       return false;
     } catch (err) {
-      logger.error(
+      this.logger.error(
         "Failed to start Tomcat in debug mode:",
         showMessages,
         err as string,
@@ -283,7 +315,24 @@ export class Tomcat {
     const catalinaBase = await this.getCatalinaBase(tomcatHome);
 
     if (!(await this.isTomcatRunning())) {
-      logger.info("Tomcat is not running", showMessages);
+      this.logger.info("Tomcat is not running", showMessages);
+      return false;
+    }
+
+    const ownership = await this.processOwnership.read(catalinaBase);
+    if (
+      !ownership ||
+      !this.processOwnership.isCurrentWorkspaceOwner(
+        ownership,
+        catalinaBase,
+        this.getWorkspaceUri(),
+      )
+    ) {
+      this.logger.error(
+        "Refusing to stop Tomcat because this project does not own the running process.",
+        showMessages,
+        `CATALINA_BASE: ${catalinaBase}`,
+      );
       return false;
     }
 
@@ -306,28 +355,28 @@ export class Tomcat {
 
       const stopped = await this.waitForServerState("stopped", 15000);
       if (stopped) {
-        logger.success("Tomcat stopped successfully", showMessages);
+        this.logger.success("Tomcat stopped successfully", showMessages);
         return true;
       }
 
-      logger.warn(
+      this.logger.warn(
         "Graceful stop timed out, attempting forced termination...",
         showMessages,
       );
       await this.kill();
       const forced = await this.waitForServerState("stopped", 5000);
       if (forced) {
-        logger.success("Tomcat stopped after force termination", showMessages);
+        this.logger.success("Tomcat stopped after force termination", showMessages);
         return true;
       }
 
-      logger.error(
+      this.logger.error(
         "Tomcat could not be terminated and may still be running.",
         showMessages,
       );
       return false;
     } catch (err) {
-      logger.error("Failed to stop Tomcat:", showMessages, err as string);
+      this.logger.error("Failed to stop Tomcat:", showMessages, err as string);
       return false;
     }
   }
@@ -345,7 +394,7 @@ export class Tomcat {
     }
 
     if (running && this.lastStartMode !== "debug") {
-      logger.info(
+      this.logger.info(
         "Restarting Tomcat in debug mode for debugger attach...",
         showMessages,
       );
@@ -374,34 +423,34 @@ export class Tomcat {
     const wasRunning = await this.isTomcatRunning();
 
     if (!wasRunning) {
-      logger.info("Tomcat is not running, starting it...");
+      this.logger.info("Tomcat is not running, starting it...");
       const started = wasDebugMode
         ? await this.startDebug(true)
         : await this.start(true);
 
       if (!started) {
-        logger.error("Tomcat reload failed: unable to start Tomcat.", true);
+        this.logger.error("Tomcat reload failed: unable to start Tomcat.", true);
       }
       return;
     }
 
     try {
       await this.ensureTomcatStopped(true);
-      logger.clearOutput();
+      this.logger.clearOutput();
 
       const restarted = wasDebugMode
         ? await this.startDebug(false)
         : await this.start(false);
 
       if (restarted) {
-        logger.success(
+        this.logger.success(
           wasDebugMode ? "Tomcat reloaded in debug mode" : "Tomcat reloaded",
         );
       } else {
-        logger.error("Tomcat reload failed: the server did not restart.", true);
+        this.logger.error("Tomcat reload failed: the server did not restart.", true);
       }
     } catch (err) {
-      logger.error("Failed to reload Tomcat:", true, err as string);
+      this.logger.error("Failed to reload Tomcat:", true, err as string);
     }
   }
 
@@ -426,7 +475,7 @@ export class Tomcat {
     try {
       const appName = this.currentAppName || this.getAppName();
       if (!appName) {
-        logger.error(
+        this.logger.error(
           "No application name provided",
           true,
           "Please provide a valid application name",
@@ -440,87 +489,79 @@ export class Tomcat {
       const appDir = path.join(catalinaBase, "webapps", appName);
 
       if (!fs.existsSync(appDir)) {
-        logger.warn(`Webapp directory not found: ${appDir}`);
+        this.logger.warn(`Webapp directory not found: ${appDir}`);
         return;
       }
 
       fs.rmSync(appDir, { recursive: true, force: true });
-      logger.info(`Removed directory: ${appDir}`);
+      this.logger.info(`Removed directory: ${appDir}`);
 
       const workDir = path.join(catalinaBase, "work", appName);
       if (fs.existsSync(workDir)) {
         fs.rmSync(workDir, { recursive: true, force: true });
-        logger.info(`Cleaned work directory: ${workDir}`);
+        this.logger.info(`Cleaned work directory: ${workDir}`);
       }
 
       const tempDir = path.join(catalinaBase, "temp", appName);
       if (fs.existsSync(tempDir)) {
         fs.rmSync(tempDir, { recursive: true, force: true });
         fs.mkdirSync(tempDir, { recursive: true });
-        logger.info(`Cleaned temp directory: ${tempDir}`);
+        this.logger.info(`Cleaned temp directory: ${tempDir}`);
       }
 
-      logger.success("Tomcat cleaned successfully", true);
+      this.logger.success("Tomcat cleaned successfully", true);
     } catch (err) {
-      logger.error("Tomcat cleanup failed:", true, err as string);
+      this.logger.error("Tomcat cleanup failed:", true, err as string);
     }
   }
 
   /**
-   * Terminates Java-related processes to release locked Tomcat resources
+   * Terminates only the process persistently owned by this project.
    *
-   * Handles platform-specific process termination:
-   * - Windows: Uses `taskkill` to forcibly stop `java.exe` and `javaw.exe`
-   * - Unix-like: Uses `pkill` to target `java` and `tomcat` processes
-   *
-   * Ensures file resources such as JARs are no longer locked by running JVMs
-   * before attempting to clean the Tomcat directories.
+   * Port-based and process-name fallbacks are intentionally forbidden because
+   * they can terminate a Tomcat instance owned by another Workspace Folder.
    */
   public async kill(): Promise<void> {
     try {
-      // Priority 1: Kill the tracked child process by PID
-      if (this.tomcatProcess && this.tomcatProcess.pid) {
-        const pid = this.tomcatProcess.pid;
+      const catalinaBase =
+        this.activeCatalinaBase ?? (await this.getCatalinaBase());
+      const ownership = catalinaBase
+        ? await this.processOwnership.read(catalinaBase)
+        : null;
+      if (
+        !catalinaBase ||
+        !ownership ||
+        !this.processOwnership.isCurrentWorkspaceOwner(
+          ownership,
+          catalinaBase,
+          this.getWorkspaceUri(),
+        )
+      ) {
+        this.logger.warn(
+          "Skipped forced termination because no process owned by this project was found.",
+        );
+        return;
+      }
+
+      const pid = ownership.pid;
+      if (this.processOwnership.isProcessAlive(pid)) {
         if (process.platform === "win32") {
           await execAsync(`taskkill /F /T /PID ${pid}`).catch(() => undefined);
         } else {
           try {
-            process.kill(-pid, "SIGKILL");
+            process.kill(pid, "SIGKILL");
           } catch {
             await execAsync(`kill -9 ${pid}`).catch(() => undefined);
           }
         }
-        this.tomcatProcess = null;
-        return;
       }
-
-      // Priority 2: Kill only the process listening on the configured port
-      if (process.platform === "win32") {
-        const { stdout } = await execAsync(
-          `netstat -ano | findstr ":${this.port}" | findstr "LISTENING"`,
-        ).catch(() => ({ stdout: "" }));
-        const pids = [
-          ...new Set(
-            stdout
-              .split(/\r?\n/)
-              .map((line) => line.trim().split(/\s+/).pop())
-              .filter((p): p is string => !!p && /^\d+$/.test(p)),
-          ),
-        ];
-        for (const pid of pids) {
-          await execAsync(`taskkill /F /PID ${pid}`).catch(() => undefined);
-        }
-      } else {
-        const { stdout } = await execAsync(`lsof -ti :${this.port}`).catch(
-          () => ({ stdout: "" }),
-        );
-        const pids = stdout.trim().split(/\s+/).filter(Boolean);
-        for (const pid of pids) {
-          await execAsync(`kill -9 ${pid}`).catch(() => undefined);
-        }
-      }
+      await this.processOwnership.removeIfOwned(
+        catalinaBase,
+        pid,
+        this.getWorkspaceUri(),
+      );
     } catch {
-      logger.debug("No processes found to terminate");
+      this.logger.debug("No processes found to terminate");
     }
     this.tomcatProcess = null;
   }
@@ -694,7 +735,7 @@ export class Tomcat {
     const candidates = [
       process.env.CATALINA_HOME,
       process.env.TOMCAT_HOME,
-      vscode.workspace.getConfiguration().get<string>("turbocat.home"),
+      this.getConfiguration().get<string>("home"),
     ];
 
     const validCandidate = candidates.find(
@@ -703,9 +744,11 @@ export class Tomcat {
     );
 
     if (validCandidate && (await this.validateTomcatHome(validCandidate))) {
-      await vscode.workspace
-        .getConfiguration()
-        .update("turbocat.home", validCandidate, true);
+      await this.getConfiguration().update(
+        "home",
+        validCandidate,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
       this.tomcatHome = validCandidate;
       return validCandidate;
     }
@@ -721,13 +764,15 @@ export class Tomcat {
       const selectedPath = selectedFolder[0].fsPath;
 
       if (await this.validateTomcatHome(selectedPath)) {
-        await vscode.workspace
-          .getConfiguration()
-          .update("turbocat.home", selectedPath, true);
+        await this.getConfiguration().update(
+          "home",
+          selectedPath,
+          vscode.ConfigurationTarget.WorkspaceFolder,
+        );
         this.tomcatHome = selectedPath;
         return selectedPath;
       } else {
-        logger.warn(`Invalid Tomcat home: ${selectedPath} not found.`, true);
+        this.logger.warn(`Invalid Tomcat home: ${selectedPath} not found.`, true);
       }
     }
 
@@ -750,13 +795,13 @@ export class Tomcat {
       return this.javaHome;
     }
 
+    const folderUri = this.workspaceFolder?.uri;
     const candidates = [
+      this.getConfiguration().get<string>("javaHome"),
+      vscode.workspace.getConfiguration("java", folderUri).get<string>("home"),
       vscode.workspace
-        .getConfiguration()
-        .get<string>("turbocat.workspaceJavaHome"),
-      vscode.workspace.getConfiguration().get<string>("turbocat.javaHome"),
-      vscode.workspace.getConfiguration().get<string>("java.home"),
-      vscode.workspace.getConfiguration().get<string>("java.jdt.ls.java.home"),
+        .getConfiguration("java.jdt.ls", folderUri)
+        .get<string>("java.home"),
       process.env.JAVA_HOME,
       process.env.JDK_HOME,
       process.env.JAVA_JDK_HOME,
@@ -768,9 +813,11 @@ export class Tomcat {
     );
 
     if (validCandidate && (await this.validateJavaHome(validCandidate))) {
-      await vscode.workspace
-        .getConfiguration()
-        .update("turbocat.javaHome", validCandidate, true);
+      await this.getConfiguration().update(
+        "javaHome",
+        validCandidate,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
       this.javaHome = validCandidate;
       return validCandidate;
     }
@@ -786,13 +833,15 @@ export class Tomcat {
       const selectedPath = selectedFolder[0].fsPath;
 
       if (await this.validateJavaHome(selectedPath)) {
-        await vscode.workspace
-          .getConfiguration()
-          .update("turbocat.javaHome", selectedPath, true);
+        await this.getConfiguration().update(
+          "javaHome",
+          selectedPath,
+          vscode.ConfigurationTarget.WorkspaceFolder,
+        );
         this.javaHome = selectedPath;
         return selectedPath;
       } else {
-        logger.warn(`Invalid Java home: ${selectedPath} not found.`, true);
+        this.logger.warn(`Invalid Java home: ${selectedPath} not found.`, true);
       }
     }
 
@@ -851,9 +900,9 @@ export class Tomcat {
    * @log Error with detailed validation messages
    */
   public async updatePort(): Promise<void> {
-    const config = vscode.workspace.getConfiguration();
-    const newPort = config.get<number>("turbocat.port", 8080);
-    const newShutdownPort = config.get<number>("turbocat.shutdownPort", 8005);
+    const config = this.getConfiguration();
+    const newPort = config.get<number>("port", 8080);
+    const newShutdownPort = config.get<number>("shutdownPort", 8005);
     const oldPort = this.port;
     const oldShutdownPort = this.shutdownPort;
 
@@ -887,7 +936,7 @@ export class Tomcat {
       this.port = newPort;
       this.shutdownPort = newShutdownPort;
 
-      logger.success(
+      this.logger.success(
         `Updated Tomcat ports (HTTP: ${oldPort} → ${newPort}, Shutdown: ${oldShutdownPort} → ${newShutdownPort})`,
         true,
       );
@@ -898,7 +947,7 @@ export class Tomcat {
             catalinaBase,
           });
         } catch (startError) {
-          logger.error(
+          this.logger.error(
             "Tomcat failed to restart after port change:",
             true,
             startError as string,
@@ -908,9 +957,17 @@ export class Tomcat {
     } catch (err) {
       this.port = oldPort;
       this.shutdownPort = oldShutdownPort;
-      await config.update("turbocat.port", oldPort, true);
-      await config.update("turbocat.shutdownPort", oldShutdownPort, true);
-      logger.error(
+      await config.update(
+        "port",
+        oldPort,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
+      await config.update(
+        "shutdownPort",
+        oldShutdownPort,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
+      this.logger.error(
         "Failed to update Tomcat port configuration:",
         true,
         err as string,
@@ -1070,7 +1127,7 @@ export class Tomcat {
       options?.catalinaBase ?? (await this.getCatalinaBase(tomcatHome));
 
     if (action === "start") {
-      const logEncoding = logger.getLogEncoding();
+      const logEncoding = this.logger.getLogEncoding();
       const { command, args } = this.buildCommand(
         action,
         tomcatHome,
@@ -1094,6 +1151,20 @@ export class Tomcat {
         },
       });
       this.tomcatProcess = child;
+      this.activeCatalinaBase = catalinaBase;
+
+      if (!child.pid) {
+        throw new Error("Tomcat process started without a process identifier.");
+      }
+      await this.processOwnership.record({
+        pid: child.pid,
+        workspaceUri: this.workspaceFolder?.uri.toString() ?? "",
+        catalinaHome: tomcatHome,
+        catalinaBase,
+        httpPort: this.port,
+        shutdownPort: this.shutdownPort,
+        mode: options?.debug ? "debug" : "run",
+      });
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
@@ -1114,33 +1185,39 @@ export class Tomcat {
         stdoutBuffer += decode(data);
         const lines = stdoutBuffer.split(/\r?\n/);
         stdoutBuffer = lines.pop() || "";
-        lines.forEach((line) => logger.appendRawLine(line));
+        lines.forEach((line) => this.logger.appendRawLine(line));
       });
 
       child.stderr.on("data", (data) => {
         stderrBuffer += decode(data);
         const lines = stderrBuffer.split(/\r?\n/);
         stderrBuffer = lines.pop() || "";
-        lines.forEach((line) => logger.appendRawLine(line));
+        lines.forEach((line) => this.logger.appendRawLine(line));
       });
 
       child.stdout.on("end", () => {
         if (stdoutBuffer.trim()) {
-          logger.appendRawLine(stdoutBuffer);
+          this.logger.appendRawLine(stdoutBuffer);
         }
         stdoutBuffer = "";
       });
 
       child.stderr.on("end", () => {
         if (stderrBuffer.trim()) {
-          logger.appendRawLine(stderrBuffer);
+          this.logger.appendRawLine(stderrBuffer);
         }
         stderrBuffer = "";
       });
 
       // Register cleanup handler for when process eventually exits
       child.on("close", () => {
+        const closedPid = child.pid;
         this.tomcatProcess = null;
+        void this.processOwnership.removeIfOwned(
+          catalinaBase,
+          closedPid,
+          this.getWorkspaceUri(),
+        );
       });
 
       // Only catch immediate startup failures (e.g. binary not found)
@@ -1258,32 +1335,33 @@ export class Tomcat {
    */
   private async ensureTomcatStopped(
     showMessages: boolean = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!(await this.isTomcatRunning())) {
-      return;
+      return true;
     }
 
-    logger.info("Stopping Tomcat before operation...", showMessages);
+    this.logger.info("Stopping Tomcat before operation...", showMessages);
     const stoppedGracefully = await this.stop(showMessages);
 
     if (stoppedGracefully || !(await this.isTomcatRunning())) {
-      return;
+      return true;
     }
 
-    logger.warn(
+    this.logger.warn(
       "Graceful shutdown failed, forcing termination...",
       showMessages,
     );
     await this.kill();
     const forced = await this.waitForServerState("stopped", 5000);
     if (!forced) {
-      logger.error(
+      this.logger.error(
         "Forced termination failed; Tomcat may still be running.",
         showMessages,
       );
     } else if (showMessages) {
-      logger.success("Tomcat stopped after force termination", showMessages);
+      this.logger.success("Tomcat stopped after force termination", showMessages);
     }
+    return forced;
   }
 
   private async waitForServerState(
@@ -1310,9 +1388,7 @@ export class Tomcat {
 
   private resolveDeployPathSetting(): string {
     const configured =
-      vscode.workspace
-        .getConfiguration()
-        .get<string>("turbocat.deployPath", "") || "";
+      this.getConfiguration().get<string>("deployPath", "") || "";
     return normalizeDeploymentPath(configured);
   }
 
@@ -1322,7 +1398,10 @@ export class Tomcat {
       return "";
     }
 
-    return TomcatBase.getInstance().resolveCatalinaBase(resolvedTomcatHome);
+    return TomcatBase.getInstance().resolveCatalinaBase(
+      resolvedTomcatHome,
+      this.workspaceFolder?.uri,
+    );
   }
 
   public async getWebappsRoot(tomcatHome?: string): Promise<string> {
@@ -1337,9 +1416,12 @@ export class Tomcat {
     }
 
     const catalinaBase =
-      await TomcatBase.getInstance().initializeWorkspaceBase(tomcatHome);
-    Logger.getInstance().setRuntimeBase(catalinaBase);
-    logger.success(
+      await TomcatBase.getInstance().initializeWorkspaceBase(
+        tomcatHome,
+        this.workspaceFolder?.uri,
+      );
+    this.logger.setRuntimeBase(catalinaBase);
+    this.logger.success(
       `Workspace Tomcat configuration initialized: ${catalinaBase}`,
       true,
     );

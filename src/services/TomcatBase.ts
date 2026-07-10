@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
+import { getActiveWorkspaceFolder, getWorkspaceConfiguration } from '../core/workspace';
 
 export class TomcatBase {
     private static instance: TomcatBase;
@@ -14,24 +15,25 @@ export class TomcatBase {
         return TomcatBase.instance;
     }
 
-    public isWorkspaceBaseEnabled(): boolean {
-        return vscode.workspace.getConfiguration().get<boolean>('turbocat.useWorkspaceTomcatBase', true);
+    public isWorkspaceBaseEnabled(resource?: vscode.Uri): boolean {
+        return this.getConfiguredRelativePath(resource).length > 0;
     }
 
-    public getConfiguredRelativePath(): string {
-        const configured = vscode.workspace.getConfiguration()
-            .get<string>('turbocat.workspaceTomcatBasePath', this.defaultRelativeBase);
-        const trimmed = (configured || this.defaultRelativeBase).trim();
-        return trimmed || this.defaultRelativeBase;
+    public getConfiguredRelativePath(resource?: vscode.Uri): string {
+        const config = getWorkspaceConfiguration('turbocat', resource);
+        return (config.get<string>('tomcatBase', this.defaultRelativeBase) ?? '').trim();
     }
 
-    public getWorkspaceBasePath(): string | null {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    public getWorkspaceBasePath(resource?: vscode.Uri): string | null {
+        const workspaceRoot = getActiveWorkspaceFolder(resource)?.uri.fsPath;
         if (!workspaceRoot) {
             return null;
         }
 
-        const configuredPath = this.getConfiguredRelativePath();
+        const configuredPath = this.getConfiguredRelativePath(resource);
+        if (!configuredPath) {
+            return null;
+        }
         if (path.isAbsolute(configuredPath)) {
             return path.normalize(configuredPath);
         }
@@ -39,12 +41,12 @@ export class TomcatBase {
         return path.join(workspaceRoot, configuredPath);
     }
 
-    public async resolveCatalinaBase(tomcatHome: string): Promise<string> {
-        if (!this.isWorkspaceBaseEnabled()) {
+    public async resolveCatalinaBase(tomcatHome: string, resource?: vscode.Uri): Promise<string> {
+        if (!this.isWorkspaceBaseEnabled(resource)) {
             return tomcatHome;
         }
 
-        const workspaceBase = this.getWorkspaceBasePath();
+        const workspaceBase = this.getWorkspaceBasePath(resource);
         if (!workspaceBase) {
             return tomcatHome;
         }
@@ -53,8 +55,8 @@ export class TomcatBase {
         return workspaceBase;
     }
 
-    public async initializeWorkspaceBase(tomcatHome: string): Promise<string> {
-        const workspaceBase = this.getWorkspaceBasePath();
+    public async initializeWorkspaceBase(tomcatHome: string, resource?: vscode.Uri): Promise<string> {
+        const workspaceBase = this.getWorkspaceBasePath(resource);
         if (!workspaceBase) {
             throw new Error('No workspace folder found');
         }

@@ -4,22 +4,26 @@
  */
 
 import * as vscode from 'vscode';
-import { Builder } from '../services/Builder';
-import { Tomcat } from '../services/Tomcat';
 import { Logger } from '../services/Logger';
 import { Toolbar } from '../services/Toolbar';
 import { DebugProfile } from '../services/DebugProfile';
 import iconv from 'iconv-lite';
+import { getWorkspaceConfiguration } from './workspace';
+import { ProjectRuntime, ProjectRuntimeRegistry } from './ProjectRuntimeRegistry';
+
+let runtimeRegistry: ProjectRuntimeRegistry | undefined;
 
 /**
  * Extension activation - initializes services and registers commands
  */
-export function activate(context: vscode.ExtensionContext) {
-    const builder = Builder.getInstance();
-    const tomcat = Tomcat.getInstance();
-    builder.ensureLocalConfigTemplate().catch(error => {
-        Logger.getInstance().debug(`Local config template setup skipped: ${error}`);
-    });
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        await migrateLegacyWorkspaceConfiguration(folder.uri);
+    }
+    runtimeRegistry = new ProjectRuntimeRegistry();
+    for (const runtime of runtimeRegistry.getAll()) {
+        void initializeProjectRuntime(runtime);
+    }
     // Initialize the Tomcat toolbar
     const toolbar = Toolbar.getInstance();
     toolbar.init();
@@ -32,42 +36,59 @@ export function activate(context: vscode.ExtensionContext) {
 
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('turbocat.start', () => tomcat.start(true)),
-        vscode.commands.registerCommand('turbocat.stop', () => tomcat.stop(true)),
-        vscode.commands.registerCommand('turbocat.clean', () => tomcat.clean()),
-        vscode.commands.registerCommand('turbocat.deploy', () => builder.deploy('Choice')),
-        vscode.commands.registerCommand('turbocat.startDebug', () => tomcat.startDebug(true)),
-        vscode.commands.registerCommand('turbocat.reload', () => tomcat.reload()),
-        vscode.commands.registerCommand('turbocat.initializeWorkspaceTomcatBase', () => tomcat.initializeWorkspaceTomcatBase()),
+        vscode.commands.registerCommand('turbocat.start', () => runtimeRegistry?.forResource()?.tomcat.start(true)),
+        vscode.commands.registerCommand('turbocat.stop', () => runtimeRegistry?.forResource()?.tomcat.stop(true)),
+        vscode.commands.registerCommand('turbocat.clean', () => runtimeRegistry?.forResource()?.tomcat.clean()),
+        vscode.commands.registerCommand('turbocat.deploy', () => runtimeRegistry?.forResource()?.builder.deploy('Choice')),
+        vscode.commands.registerCommand('turbocat.startDebug', () => runtimeRegistry?.forResource()?.tomcat.startDebug(true)),
+        vscode.commands.registerCommand('turbocat.reload', () => runtimeRegistry?.forResource()?.tomcat.reload()),
+        vscode.commands.registerCommand('turbocat.initializeWorkspaceTomcatBase', () => runtimeRegistry?.forResource()?.tomcat.initializeWorkspaceTomcatBase()),
         vscode.commands.registerCommand('turbocat.toggleSmartDeploy', async () => {
-            const currentMode = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy', 'Disable');
+            const runtime = runtimeRegistry?.forResource();
+            if (!runtime) {
+                return;
+            }
+            const configuration = getWorkspaceConfiguration('turbocat', runtime.workspaceFolder.uri);
+            const currentMode = configuration.get<string>('smartDeploy', 'Disable');
             const newMode = currentMode === 'Smart' ? 'Disable' : 'Smart';
             
-            await vscode.workspace.getConfiguration().update('turbocat.smartDeploy', newMode, true);
+            await configuration.update('smartDeploy', newMode, vscode.ConfigurationTarget.WorkspaceFolder);
             Logger.getInstance().info(`Smart Deploy: ${newMode === 'Smart' ? 'Enabled' : 'Disabled'}`, true);
             
             if (newMode === 'Smart') {
-                builder.initializeSmartDeploy();
+                await runtime.builder.initializeSmartDeploy();
             } else {
-                builder.disposeSmartDeploy();
+                runtime.builder.disposeSmartDeploy();
             }
         }),
 
-        // Debug commands for troubleshooting smart deployment
-        vscode.commands.registerCommand('turbocat.debugSmartDeploy', () => builder.debugSmartDeploymentStatus()),
-        vscode.commands.registerCommand('turbocat.testCompiledWatcher', () => builder.testCompiledFileWatcher()),
         vscode.commands.registerCommand('turbocat.generateDebugProfile', () => DebugProfile.getInstance().generateJavaAttachProfile()),
 
         // Configuration change listener with efficient filtering
         vscode.workspace.onDidChangeConfiguration(async (event) => {
             if (event.affectsConfiguration('turbocat')) {
-                updateSettings(event);
+                void updateSettings(event);
             }
+        }),
+        vscode.workspace.onDidChangeWorkspaceFolders(event => {
+            for (const folder of event.removed) {
+                runtimeRegistry?.remove(folder);
+            }
+            for (const folder of event.added) {
+                const runtime = runtimeRegistry?.getOrCreate(folder);
+                if (runtime) {
+                    void migrateLegacyWorkspaceConfiguration(folder.uri)
+                        .then(() => initializeProjectRuntime(runtime));
+                }
+            }
+        }),
+        vscode.workspace.onWillSaveTextDocument(event => {
+            void runtimeRegistry?.forResource(event.document.uri)?.builder.autoDeploy(event.reason);
         })
     );
 
     const debugAttachProvider = vscode.debug.registerDebugConfigurationProvider('java', {
-        async resolveDebugConfiguration(_folder, debugConfiguration) {
+        async resolveDebugConfiguration(folder, debugConfiguration) {
             const profileName = DebugProfile.getInstance().getAttachProfileName();
             const isTurboCatAttach = typeof debugConfiguration?.name === 'string' &&
                 debugConfiguration.name === profileName &&
@@ -78,7 +99,8 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             try {
-                const prepared = await tomcat.ensureDebugModeActive(false);
+                const tomcat = runtimeRegistry?.forResource(folder?.uri)?.tomcat;
+                const prepared = await tomcat?.ensureDebugModeActive(false);
                 if (!prepared) {
                     Logger.getInstance().error('TurboCat: Failed to prepare Tomcat for debug attach.', true);
                     return null;
@@ -94,25 +116,61 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(debugAttachProvider);
 
-    if (Builder.isJavaEEProject()) {
-        Logger.getInstance().init();
+}
 
-        context.subscriptions.push(
-            vscode.workspace.onWillSaveTextDocument((e) => {
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (workspaceFolders) {
-                    const selectedProjectPath = workspaceFolders[0].uri.fsPath;
-                    if (e.document.uri.fsPath.startsWith(selectedProjectPath)) {
-                        builder.autoDeploy(e.reason);
-                    }
-                }
-            })
-        );
-        
-        // Initialize smart deploy if configured
-        const smartDeploy = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy');
-        if (smartDeploy === 'Smart') {
-            builder.initializeSmartDeploy();
+async function initializeProjectRuntime(runtime: ProjectRuntime): Promise<void> {
+    runtime.logger.init();
+    await runtime.builder.ensureLocalConfigTemplate().catch(error => {
+        Logger.getInstance().debug(`Local config template setup skipped: ${error}`);
+    });
+    const configuration = getWorkspaceConfiguration('turbocat', runtime.workspaceFolder.uri);
+    if (configuration.get<string>('smartDeploy') === 'Smart') {
+        await runtime.builder.initializeSmartDeploy();
+    }
+}
+
+async function migrateLegacyWorkspaceConfiguration(resource: vscode.Uri): Promise<void> {
+    const configuration = getWorkspaceConfiguration('turbocat', resource);
+    const scopes = [
+        { value: 'globalValue', target: vscode.ConfigurationTarget.Global },
+        { value: 'workspaceValue', target: vscode.ConfigurationTarget.Workspace },
+        { value: 'workspaceFolderValue', target: vscode.ConfigurationTarget.WorkspaceFolder }
+    ] as const;
+
+    const migrate = async <T>(legacyKey: string, modernKey: string): Promise<void> => {
+        const legacy = configuration.inspect<T>(legacyKey);
+        const modern = configuration.inspect<T>(modernKey);
+        for (const scope of scopes) {
+            const legacyValue = legacy?.[scope.value];
+            if (legacyValue !== undefined && modern?.[scope.value] === undefined) {
+                await configuration.update(modernKey, legacyValue, scope.target);
+            }
+            if (legacyValue !== undefined) {
+                await configuration.update(legacyKey, undefined, scope.target);
+            }
+        }
+    };
+
+    await migrate<string>('workspaceJavaHome', 'javaHome');
+    await migrate<string>('logEncodingCustom', 'logEncoding');
+    await migrate<string>('autoDeployBuildType', 'preferredBuildType');
+
+    const enabled = configuration.inspect<boolean>('useWorkspaceTomcatBase');
+    const legacyPath = configuration.inspect<string>('workspaceTomcatBasePath');
+    const modernBase = configuration.inspect<string>('tomcatBase');
+    for (const scope of scopes) {
+        const hasLegacy = enabled?.[scope.value] !== undefined || legacyPath?.[scope.value] !== undefined;
+        if (hasLegacy && modernBase?.[scope.value] === undefined) {
+            const value = enabled?.[scope.value] === false
+                ? ''
+                : legacyPath?.[scope.value] ?? '.vscode/turbocat';
+            await configuration.update('tomcatBase', value, scope.target);
+        }
+        if (enabled?.[scope.value] !== undefined) {
+            await configuration.update('useWorkspaceTomcatBase', undefined, scope.target);
+        }
+        if (legacyPath?.[scope.value] !== undefined) {
+            await configuration.update('workspaceTomcatBasePath', undefined, scope.target);
         }
     }
 }
@@ -121,94 +179,71 @@ export function activate(context: vscode.ExtensionContext) {
  * Extension deactivation - cleanup resources
  */
 export async function deactivate() {
-    await Tomcat.getInstance().deactivate();
-    Logger.getInstance().deactivate();
-    Builder.getInstance().disposeSmartDeploy();
+    await runtimeRegistry?.dispose();
+    runtimeRegistry = undefined;
+    Logger.disposeAll();
 }
 
 /**
  * Handle configuration changes and update services accordingly
  */
-function updateSettings(event: vscode.ConfigurationChangeEvent) {
-    if (event.affectsConfiguration('turbocat.home')) {
-        Tomcat.getInstance().findTomcatHome();
-        Builder.getInstance().updateConfig();
-        Toolbar.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.javaHome')) {
-        Tomcat.getInstance().findJavaHome();
-        Builder.getInstance().updateConfig();
-        Toolbar.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.port') ||
-        event.affectsConfiguration('turbocat.shutdownPort') ||
-        event.affectsConfiguration('turbocat.debugPort')) {
-        Tomcat.getInstance().updateConfig();
-        Tomcat.getInstance().updatePort();
-        Toolbar.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.smartDeploy')) {
-        const mode = vscode.workspace.getConfiguration().get<string>('turbocat.smartDeploy');
-        if (mode === 'Smart') {
-            Builder.getInstance().initializeSmartDeploy();
-        } else {
-            Builder.getInstance().disposeSmartDeploy();
+async function updateSettings(event: vscode.ConfigurationChangeEvent): Promise<void> {
+    for (const runtime of runtimeRegistry?.getAll() ?? []) {
+        const resource = runtime.workspaceFolder.uri;
+        if (!event.affectsConfiguration('turbocat', resource)) {
+            continue;
         }
-        Toolbar.getInstance().updateConfig();
-    }
 
-    if (event.affectsConfiguration('turbocat.tomcatEnvironment') ||
-        event.affectsConfiguration('turbocat.tomcatDebugEnvironment')) {
-        Tomcat.getInstance().updateConfig();
-    }
+        const configuration = getWorkspaceConfiguration('turbocat', resource);
+        const affectsAny = (keys: string[]): boolean =>
+            keys.some(key => event.affectsConfiguration(`turbocat.${key}`, resource));
+        const portChanged = affectsAny(['port', 'shutdownPort']);
+        const tomcatChanged = affectsAny([
+            'home', 'javaHome', 'port', 'shutdownPort', 'debugPort', 'deployPath',
+            'tomcatBase', 'tomcatEnvironment', 'tomcatDebugEnvironment'
+        ]);
+        const builderChanged = affectsAny([
+            'javaHome', 'mavenHome', 'deployPath', 'tomcatBase', 'preferredBuildType',
+            'syncBypassPatterns', 'compileEncoding', 'smartDeployDebounce'
+        ]);
+        const loggerChanged = affectsAny([
+            'home', 'tomcatBase', 'logEncoding', 'logLevel', 'showTimestamp',
+            'autoShowOutput', 'showSmartDeployLog'
+        ]);
 
-    if (event.affectsConfiguration('turbocat.deployPath')) {
-        Tomcat.getInstance().updateConfig();
-        Builder.getInstance().updateConfig();
-    }
+        if (portChanged) {
+            await runtime.tomcat.updatePort();
+        }
+        if (tomcatChanged) {
+            runtime.tomcat.updateConfig();
+        }
+        if (builderChanged) {
+            runtime.builder.updateConfig();
+        }
 
-    if (event.affectsConfiguration('turbocat.useWorkspaceTomcatBase') ||
-        event.affectsConfiguration('turbocat.workspaceTomcatBasePath')) {
-        Tomcat.getInstance().updateConfig();
-        Builder.getInstance().updateConfig();
-        Logger.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.preferredBuildType') ||
-        event.affectsConfiguration('turbocat.syncBypassPatterns')) {
-        Builder.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.showTimestamp') ||
-        event.affectsConfiguration('turbocat.logLevel') ||
-        event.affectsConfiguration('turbocat.autoShowOutput')) {
-        Logger.getInstance().updateConfig();
-    }
-
-    if (event.affectsConfiguration('turbocat.logEncoding') ||
-        event.affectsConfiguration('turbocat.logEncodingCustom')) {
-        const configuration = vscode.workspace.getConfiguration();
-        const custom = (configuration.get<string>('turbocat.logEncodingCustom', '') ?? '').trim();
-        let effective = custom || configuration.get<string>('turbocat.logEncoding', 'utf8');
-
-        if (effective && !iconv.encodingExists(effective)) {
-            Logger.getInstance().warn(`Unsupported encoding '${effective}' detected. Falling back to utf8.`);
-            if (custom) {
-                configuration.update('turbocat.logEncodingCustom', '', true);
-                effective = configuration.get<string>('turbocat.logEncoding', 'utf8');
+        if (event.affectsConfiguration('turbocat.home', resource)) {
+            await runtime.tomcat.findTomcatHome();
+        }
+        if (event.affectsConfiguration('turbocat.javaHome', resource)) {
+            await runtime.tomcat.findJavaHome();
+        }
+        if (event.affectsConfiguration('turbocat.smartDeploy', resource)) {
+            if (configuration.get<string>('smartDeploy') === 'Smart') {
+                await runtime.builder.initializeSmartDeploy();
             } else {
-                configuration.update('turbocat.logEncoding', 'utf8', true);
-                effective = 'utf8';
+                runtime.builder.disposeSmartDeploy();
             }
         }
-
-        Logger.getInstance().updateConfig();
+        if (event.affectsConfiguration('turbocat.logEncoding', resource)) {
+            const effective = configuration.get<string>('logEncoding', 'utf8');
+            if (effective && !iconv.encodingExists(effective)) {
+                runtime.logger.warn(`Unsupported encoding '${effective}' detected. Falling back to utf8.`);
+                await configuration.update('logEncoding', 'utf8', vscode.ConfigurationTarget.WorkspaceFolder);
+            }
+        }
+        if (loggerChanged) {
+            runtime.logger.updateConfig();
+        }
     }
-
-    if (event.affectsConfiguration('turbocat.compileEncoding')) {
-        Builder.getInstance().updateConfig();
-    }
+    Toolbar.getInstance().updateConfig();
 }

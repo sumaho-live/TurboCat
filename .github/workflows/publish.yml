@@ -2,8 +2,13 @@ name: Publish TurboCat Extension
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-publish:
@@ -20,7 +25,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -29,8 +34,12 @@ jobs:
       - name: Run test suite
         run: xvfb-run -a npm test
 
+      - name: Verify tag matches package version
+        if: github.event_name == 'push'
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
+
       - name: Package VSIX artifact
-        run: npx --yes @vscode/vsce package --no-dependencies
+        run: npx --no-install vsce package --no-dependencies
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -46,4 +55,4 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         if: env.VSCE_PAT != ''
-        run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
+        run: npx --no-install vsce publish --pat "$VSCE_PAT"

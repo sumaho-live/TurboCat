@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import { Tomcat } from '../../services/Tomcat';
+import { Logger } from '../../services/Logger';
 
 describe('Tomcat Tests', () => {
   let tomcat: Tomcat;
@@ -13,14 +14,16 @@ describe('Tomcat Tests', () => {
   beforeEach(() => {
     sandbox = sinon.createSandbox();
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'turbocat-tomcat-test-'));
-    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
+    Tomcat.clearInstancesForTests();
+    Logger.clearInstancesForTests();
     tomcat = Tomcat.getInstance();
   });
 
   afterEach(() => {
     sandbox.restore();
     fs.rmSync(tempRoot, { recursive: true, force: true });
-    (Tomcat as unknown as { instance?: Tomcat }).instance = undefined;
+    Tomcat.clearInstancesForTests();
+    Logger.clearInstancesForTests();
   });
 
   it('rejects ports outside the supported range', async () => {
@@ -47,6 +50,14 @@ describe('Tomcat Tests', () => {
     tomcat.setAppName('../outside/./app/');
 
     assert.strictEqual(tomcat.getAppName(), 'outside/app');
+  });
+
+  it('does not stop Tomcat when the extension deactivates', async () => {
+    const stop = sandbox.stub(tomcat, 'stop').resolves(true);
+
+    await tomcat.deactivate();
+
+    assert.strictEqual(stop.called, false);
   });
 
   it('updates shutdown and HTTP ports in server.xml without touching AJP', async () => {

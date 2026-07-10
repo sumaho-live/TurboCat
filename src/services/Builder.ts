@@ -6,13 +6,22 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import * as fsp from "fs/promises";
 import * as os from "os";
-import { exec, spawn } from "child_process";
 import { env } from "vscode";
 import { glob } from "glob";
 import { Tomcat } from "./Tomcat";
 import { Logger } from "./Logger";
 import { normalizeDeploymentPath } from "../utils/deploymentPath";
+import {
+  getActiveWorkspaceFolder,
+  getWorkspaceConfiguration,
+} from "../core/workspace";
+import { ProjectDetector } from "./project/ProjectDetector";
+import { globToRegex } from "./project/GlobPattern";
+import { EclipseMetadataParser } from "./project/EclipseMetadataParser";
+import { CommandRunner } from "./build/CommandRunner";
+import { DirectorySynchronizer } from "./deployment/DirectorySynchronizer";
 // import { promisify } from 'util';
 
 // const execAsync = promisify(exec);
@@ -69,18 +78,6 @@ interface MavenConfig {
 /**
  * Smart deployment mapping configuration
  */
-const getTomcat = () => Tomcat.getInstance();
-const getLogger = () => Logger.getInstance();
-const smartLog = {
-  info: (message: string) => getLogger().info(message, false, "smartDeploy"),
-  success: (message: string) =>
-    getLogger().success(message, false, "smartDeploy"),
-  debug: (message: string) => getLogger().debug(message, false, "smartDeploy"),
-  warn: (message: string) => getLogger().warn(message, false, "smartDeploy"),
-  error: (message: string, detail?: Error | string) =>
-    getLogger().error(message, false, detail, "smartDeploy"),
-};
-
 interface ProjectStructure {
   type: "maven" | "gradle" | "eclipse" | "plain";
   javaOutputDir: string;
@@ -215,10 +212,23 @@ class MavenConfigParser implements BuildConfigParser {
   private workspaceRoot: string;
   private pomPath: string;
   private mavenConfig?: MavenConfig;
+  private readonly smartLog: {
+    info(message: string): void;
+    debug(message: string): void;
+    warn(message: string): void;
+    error(message: string, detail?: Error | string): void;
+  };
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, logger: Logger) {
     this.workspaceRoot = workspaceRoot;
     this.pomPath = path.join(workspaceRoot, "pom.xml");
+    this.smartLog = {
+      info: (message) => logger.info(message, false, "smartDeploy"),
+      debug: (message) => logger.debug(message, false, "smartDeploy"),
+      warn: (message) => logger.warn(message, false, "smartDeploy"),
+      error: (message, detail) =>
+        logger.error(message, false, detail, "smartDeploy"),
+    };
   }
 
   /**
@@ -242,7 +252,7 @@ class MavenConfigParser implements BuildConfigParser {
 
     try {
       const pomContent = fs.readFileSync(this.pomPath, "utf-8");
-      smartLog.debug("Parsing Maven pom.xml for build configuration...");
+      this.smartLog.debug("Parsing Maven pom.xml for build configuration...");
 
       const config: MavenConfig = {};
 
@@ -277,10 +287,10 @@ class MavenConfigParser implements BuildConfigParser {
       config.warConfig = this.parseWarPluginConfig(pomContent);
 
       this.mavenConfig = config;
-      smartLog.debug(`Maven config parsed: ${JSON.stringify(config, null, 2)}`);
+      this.smartLog.debug(`Maven config parsed: ${JSON.stringify(config, null, 2)}`);
       return config;
     } catch (error) {
-      smartLog.error("Failed to parse pom.xml", error as string);
+      this.smartLog.error("Failed to parse pom.xml", error as string);
       throw error;
     }
   }
@@ -480,7 +490,7 @@ class MavenConfigParser implements BuildConfigParser {
       excludeExtensions: [".java", ".class"],
     });
 
-    smartLog.debug(`Generated ${mappings.length} mappings from Maven pom.xml`);
+    this.smartLog.debug(`Generated ${mappings.length} mappings from Maven pom.xml`);
     return mappings;
   }
 
@@ -523,54 +533,54 @@ class MavenConfigParser implements BuildConfigParser {
    * Debug method: Print Maven configuration analysis
    */
   public async debugMavenConfiguration(): Promise<void> {
-    smartLog.info("🔍 === Maven Configuration Debug ===");
+    this.smartLog.info("🔍 === Maven Configuration Debug ===");
 
     if (!this.isProjectSupported()) {
-      smartLog.warn("❌ Maven project not supported - pom.xml not found");
+      this.smartLog.warn("❌ Maven project not supported - pom.xml not found");
       return;
     }
 
     try {
       const config = await this.parsePomXml();
-      smartLog.info(`📋 Maven Configuration:`);
-      smartLog.info(`   - ArtifactId: ${config.artifactId || "Not specified"}`);
-      smartLog.info(`   - FinalName: ${config.finalName || "Not specified"}`);
-      smartLog.info(
+      this.smartLog.info(`📋 Maven Configuration:`);
+      this.smartLog.info(`   - ArtifactId: ${config.artifactId || "Not specified"}`);
+      this.smartLog.info(`   - FinalName: ${config.finalName || "Not specified"}`);
+      this.smartLog.info(
         `   - OutputDirectory: ${config.outputDirectory || "target/classes (default)"}`,
       );
-      smartLog.info(
+      this.smartLog.info(
         `   - Resources: ${config.resources ? config.resources.length : 0} entries`,
       );
 
       if (config.resources) {
         config.resources.forEach((resource, index) => {
-          smartLog.info(
+          this.smartLog.info(
             `     Resource ${index + 1}: ${resource.directory} → ${resource.targetPath || "classes root"}`,
           );
         });
       }
 
-      smartLog.info(
+      this.smartLog.info(
         `   - War Source Directory: ${config.warConfig?.warSourceDirectory || "src/main/webapp (default)"}`,
       );
 
       const mappings = await this.parseResourceMappings();
-      smartLog.info(`🎯 Generated ${mappings.length} deployment mappings:`);
+      this.smartLog.info(`🎯 Generated ${mappings.length} deployment mappings:`);
       mappings.forEach((mapping, index) => {
-        smartLog.info(
+        this.smartLog.info(
           `   Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`,
         );
       });
 
       const webappConfig = await this.parseWebappConfiguration();
-      smartLog.info(`🌐 Webapp Configuration:`);
-      smartLog.info(`   - WebappName: ${webappConfig.webappName}`);
-      smartLog.info(`   - ContextPath: ${webappConfig.contextPath}`);
+      this.smartLog.info(`🌐 Webapp Configuration:`);
+      this.smartLog.info(`   - WebappName: ${webappConfig.webappName}`);
+      this.smartLog.info(`   - ContextPath: ${webappConfig.contextPath}`);
     } catch (error) {
-      smartLog.error("Maven configuration debug failed", error as string);
+      this.smartLog.error("Maven configuration debug failed", error as string);
     }
 
-    smartLog.info("🔍 === End Maven Configuration Debug ===");
+    this.smartLog.info("🔍 === End Maven Configuration Debug ===");
   }
 }
 
@@ -589,7 +599,8 @@ interface CompiledMapping extends SmartDeployMapping {
 }
 
 export class Builder {
-  private static instance: Builder;
+  private static readonly instances = new Map<string, Builder>();
+  private readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
   private autoDeployMode: "Disable" | "Smart";
   private isDeploying = false;
   private attempts = 0;
@@ -617,14 +628,17 @@ export class Builder {
   /**
    * Private constructor - initialize configuration and state
    */
-  private constructor() {
+  private constructor(workspaceFolder?: vscode.WorkspaceFolder) {
+    this.workspaceFolder = workspaceFolder;
     // Use smartDeploy setting
-    this.autoDeployMode = vscode.workspace
-      .getConfiguration()
-      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
-    this.preferredBuildType = vscode.workspace
-      .getConfiguration()
-      .get("turbocat.preferredBuildType", "Auto") as
+    this.autoDeployMode = this.getConfiguration().get(
+      "smartDeploy",
+      "Disable",
+    ) as "Disable" | "Smart";
+    this.preferredBuildType = this.getConfiguration().get(
+      "preferredBuildType",
+      "Auto",
+    ) as
       "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
     this.loadSyncBypassPatterns();
     this.compileEncoding = this.resolveCompileEncoding();
@@ -633,24 +647,76 @@ export class Builder {
   /**
    * Get singleton Builder instance
    */
-  public static getInstance(): Builder {
-    if (!Builder.instance) {
-      Builder.instance = new Builder();
+  public static getInstance(resource?: vscode.Uri): Builder {
+    const workspaceFolder = getActiveWorkspaceFolder(resource);
+    const key = workspaceFolder?.uri.toString() ?? "__global__";
+    let instance = Builder.instances.get(key);
+    if (!instance) {
+      instance = new Builder(workspaceFolder);
+      Builder.instances.set(key, instance);
     }
-    return Builder.instance;
+    return instance;
   }
+
+  public static getAllInstances(): readonly Builder[] {
+    return [...Builder.instances.values()];
+  }
+
+  public static removeInstance(resource: vscode.Uri): void {
+    const key = resource.toString();
+    Builder.instances.get(key)?.disposeSmartDeploy();
+    Builder.instances.delete(key);
+  }
+
+  public static clearInstancesForTests(): void {
+    for (const instance of Builder.instances.values()) {
+      instance.disposeSmartDeploy();
+    }
+    Builder.instances.clear();
+  }
+
+  private getConfiguration(): vscode.WorkspaceConfiguration {
+    return getWorkspaceConfiguration("turbocat", this.workspaceFolder?.uri);
+  }
+
+  private getWorkspaceRoot(): string | undefined {
+    return this.workspaceFolder?.uri.fsPath;
+  }
+
+  private getTomcat(): Tomcat {
+    return Tomcat.getInstance(this.workspaceFolder?.uri);
+  }
+
+  private getLogger(): Logger {
+    return Logger.getInstance(this.workspaceFolder?.uri);
+  }
+
+  private readonly smartLog = {
+    info: (message: string) =>
+      this.getLogger().info(message, false, "smartDeploy"),
+    success: (message: string) =>
+      this.getLogger().success(message, false, "smartDeploy"),
+    debug: (message: string) =>
+      this.getLogger().debug(message, false, "smartDeploy"),
+    warn: (message: string) =>
+      this.getLogger().warn(message, false, "smartDeploy"),
+    error: (message: string, detail?: Error | string) =>
+      this.getLogger().error(message, false, detail, "smartDeploy"),
+  };
 
   /**
    * Update configuration from workspace settings
    */
   public updateConfig(): void {
     // Use smartDeploy setting
-    this.autoDeployMode = vscode.workspace
-      .getConfiguration()
-      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
-    this.preferredBuildType = vscode.workspace
-      .getConfiguration()
-      .get("turbocat.preferredBuildType", "Auto") as
+    this.autoDeployMode = this.getConfiguration().get(
+      "smartDeploy",
+      "Disable",
+    ) as "Disable" | "Smart";
+    this.preferredBuildType = this.getConfiguration().get(
+      "preferredBuildType",
+      "Auto",
+    ) as
       "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
     this.loadSyncBypassPatterns();
     this.compileEncoding = this.resolveCompileEncoding();
@@ -662,7 +728,7 @@ export class Builder {
    */
   public async ensureLocalConfigTemplate(): Promise<void> {
     try {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workspaceRoot = this.getWorkspaceRoot();
       if (!workspaceRoot) {
         return;
       }
@@ -693,7 +759,7 @@ export class Builder {
         await this.saveSmartDeployConfig(this.smartDeployConfig);
       }
     } catch (error) {
-      smartLog.debug(`Skipped creating local config template: ${error}`);
+      this.smartLog.debug(`Skipped creating local config template: ${error}`);
     }
   }
 
@@ -702,9 +768,10 @@ export class Builder {
    */
   private loadSyncBypassPatterns(): void {
     const raw =
-      vscode.workspace
-        .getConfiguration("turbocat")
-        .get<string>("syncBypassPatterns", "copy,副本,コピー,копия") || "";
+      this.getConfiguration().get<string>(
+        "syncBypassPatterns",
+        "copy,副本,コピー,копия",
+      ) || "";
     const patterns = raw
       .split(",")
       .map((pattern) => pattern.trim())
@@ -715,7 +782,7 @@ export class Builder {
       );
 
     this.syncBypassPatterns = patterns;
-    smartLog.debug(
+    this.smartLog.debug(
       `Sync bypass patterns: ${patterns.map((regex) => regex.source).join(", ") || "none"}`,
     );
   }
@@ -724,7 +791,7 @@ export class Builder {
    * Resolve the effective web application name using the workspace configuration override.
    */
   private resolveWebappName(defaultName?: string): string {
-    const override = getTomcat().getConfiguredDeploymentPath();
+    const override = this.getTomcat().getConfiguredDeploymentPath();
     if (override) {
       return override;
     }
@@ -734,7 +801,7 @@ export class Builder {
       return normalizeDeploymentPath(candidate);
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (workspaceRoot) {
       return path.basename(workspaceRoot);
     }
@@ -747,9 +814,8 @@ export class Builder {
    */
   private resolveCompileEncoding(): string {
     const configured =
-      vscode.workspace
-        .getConfiguration("turbocat")
-        .get<string>("compileEncoding", "UTF-8") || "UTF-8";
+      this.getConfiguration().get<string>("compileEncoding", "UTF-8") ||
+      "UTF-8";
     const value = configured.trim();
     if (!value) {
       return "UTF-8";
@@ -757,7 +823,7 @@ export class Builder {
 
     const isSafe = /^[\w.\-]+$/i.test(value);
     if (!isSafe) {
-      getLogger().warn(
+      this.getLogger().warn(
         `Unsupported compile encoding '${value}' detected. Falling back to UTF-8.`,
       );
       return "UTF-8";
@@ -795,49 +861,13 @@ export class Builder {
    *
    * @returns Boolean indicating Java EE project validity
    */
-  public static isJavaEEProject(): boolean {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders) {
+  public static isJavaEEProject(resource?: vscode.Uri): boolean {
+    const workspaceFolder = getActiveWorkspaceFolder(resource);
+    if (!workspaceFolder) {
       return false;
     }
 
-    const rootPath = workspaceFolders[0].uri.fsPath;
-    const webInfPath = path.join(rootPath, "src", "main", "webapp", "WEB-INF");
-
-    if (fs.existsSync(webInfPath)) {
-      return true;
-    }
-    if (fs.existsSync(path.join(webInfPath, "web.xml"))) {
-      return true;
-    }
-
-    const pomPath = path.join(rootPath, "pom.xml");
-    if (
-      fs.existsSync(pomPath) &&
-      fs.readFileSync(pomPath, "utf-8").includes("<packaging>war</packaging>")
-    ) {
-      return true;
-    }
-
-    const gradlePath = path.join(rootPath, "build.gradle");
-    if (
-      fs.existsSync(gradlePath) &&
-      fs.readFileSync(gradlePath, "utf-8").match(/(tomcat|jakarta|javax\.ee)/i)
-    ) {
-      return true;
-    }
-
-    const targetPath = path.join(rootPath, "target");
-    if (
-      fs.existsSync(targetPath) &&
-      fs
-        .readdirSync(targetPath)
-        .some((file) => file.endsWith(".war") || file.endsWith(".ear"))
-    ) {
-      return true;
-    }
-
-    return false;
+    return ProjectDetector.isJavaWebProject(workspaceFolder.uri.fsPath);
   }
 
   /**
@@ -845,29 +875,7 @@ export class Builder {
    * Returns absolute paths to all kind="lib" entries.
    */
   private parseEclipseClasspathLibs(projectDir: string): string[] {
-    const classpathFile = path.join(projectDir, ".classpath");
-    if (!fs.existsSync(classpathFile)) {
-      return [];
-    }
-
-    try {
-      const xml = fs.readFileSync(classpathFile, "utf-8");
-      const libs: string[] = [];
-      const entryRegex = /<classpathentry\s+kind="lib"\s+path="([^"]+)"/gi;
-      let match: RegExpExecArray | null;
-      while ((match = entryRegex.exec(xml)) !== null) {
-        const rawPath = match[1].trim();
-        // Resolve relative paths against the project directory
-        const absPath = path.isAbsolute(rawPath)
-          ? rawPath
-          : path.join(projectDir, rawPath);
-        libs.push(absPath);
-      }
-      return libs;
-    } catch (error) {
-      smartLog.debug(`Failed to parse .classpath for libraries: ${error}`);
-      return [];
-    }
+    return EclipseMetadataParser.parseClasspathLibraries(projectDir);
   }
 
   /**
@@ -881,78 +889,7 @@ export class Builder {
     javaSourceRoots: string[];
     additionalMappings: LocalDeployMapping[];
   } | null {
-    const wtpPath = path.join(
-      workspaceRoot,
-      ".settings",
-      "org.eclipse.wst.common.component",
-    );
-    if (!fs.existsSync(wtpPath)) {
-      return null;
-    }
-
-    try {
-      const xml = fs.readFileSync(wtpPath, "utf-8");
-      const result: {
-        webappName: string;
-        webResourceRoots: string[];
-        javaSourceRoots: string[];
-        additionalMappings: LocalDeployMapping[];
-      } = {
-        webappName: path.basename(workspaceRoot),
-        webResourceRoots: [],
-        javaSourceRoots: [],
-        additionalMappings: [],
-      };
-
-      // Extract deploy-name
-      const deployNameMatch = xml.match(
-        /<wb-module[^>]*deploy-name="([^"]+)"/i,
-      );
-      if (deployNameMatch?.[1]) {
-        result.webappName = deployNameMatch[1].trim();
-      }
-
-      // Extract wb-resource entries
-      const resourceRegex =
-        /<wb-resource\s+deploy-path="([^"]+)"\s+source-path="([^"]+)"/gi;
-      let match: RegExpExecArray | null;
-      while ((match = resourceRegex.exec(xml)) !== null) {
-        const deployPath = match[1].trim();
-        const sourcePath = match[2].trim().replace(/^\/+/, "");
-
-        if (deployPath === "/") {
-          result.webResourceRoots.push(sourcePath);
-        } else if (deployPath.startsWith("/WEB-INF/classes")) {
-          result.javaSourceRoots.push(sourcePath);
-        } else {
-          result.additionalMappings.push({
-            source: sourcePath,
-            destination: deployPath.replace(/^\/+/, ""),
-            description: `Eclipse WTP: ${sourcePath} → ${deployPath}`,
-            enabled: true,
-            needsReload: false,
-          });
-        }
-      }
-
-      // Extract dependent-module (library references)
-      const depRegex =
-        /<dependent-module\s+archive-name="([^"]+)"\s+handle="([^"]+)"/gi;
-      while ((match = depRegex.exec(xml)) !== null) {
-        result.additionalMappings.push({
-          source: match[2].trim(),
-          destination: `WEB-INF/lib/${match[1].trim()}`,
-          description: `Eclipse WTP library: ${match[1].trim()}`,
-          enabled: true,
-          needsReload: false,
-        });
-      }
-
-      return result;
-    } catch (error) {
-      smartLog.debug(`Failed to parse Eclipse WTP component: ${error}`);
-      return null;
-    }
+    return EclipseMetadataParser.parseWtpComponent(workspaceRoot);
   }
 
   /**
@@ -1025,9 +962,10 @@ export class Builder {
         webappName: this.resolveWebappName(defaultWebappName),
         mappings: DEFAULT_MAPPINGS[detectedType] || DEFAULT_MAPPINGS.eclipse,
         settings: {
-          debounceTime: vscode.workspace
-            .getConfiguration("turbocat")
-            .get<number>("smartDeployDebounce", 300),
+          debounceTime: this.getConfiguration().get<number>(
+            "smartDeployDebounce",
+            300,
+          ),
           enabled: true,
           logLevel: "info",
         },
@@ -1060,12 +998,12 @@ export class Builder {
    * @returns ProjectStructure with detected configuration
    */
   public detectProjectStructure(): ProjectStructure {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders) {
+    const workspaceFolder = this.workspaceFolder;
+    if (!workspaceFolder) {
       throw new Error("No workspace folder found");
     }
 
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const workspaceRoot = workspaceFolder.uri.fsPath;
 
     // Maven detection
     if (fs.existsSync(path.join(workspaceRoot, "pom.xml"))) {
@@ -1205,7 +1143,7 @@ export class Builder {
   public async deploy(
     type: "Local" | "Maven" | "Gradle" | "PreBuilt" | "Choice",
   ): Promise<void> {
-    const projectDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const projectDir = this.getWorkspaceRoot();
     if (!projectDir || !Builder.isJavaEEProject()) {
       await this.createNewProject();
       return;
@@ -1217,14 +1155,14 @@ export class Builder {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message !== Builder.DEPLOY_CANCELLED) {
-        getLogger().error("Deployment aborted:", false, message);
+        this.getLogger().error("Deployment aborted:", false, message);
       } else {
-        getLogger().info("Deployment cancelled by user");
+        this.getLogger().info("Deployment cancelled by user");
       }
       return;
     }
 
-    getLogger().info(`Using ${buildType} deployment pipeline`);
+    this.getLogger().info(`Using ${buildType} deployment pipeline`);
 
     // Pause smart deploy during manual deployment to avoid watcher conflicts.
     // The try/finally below ensures smart deploy is ALWAYS restored regardless
@@ -1233,18 +1171,18 @@ export class Builder {
     if (this.autoDeployMode === "Smart") {
       this.autoDeployMode = "Disable";
       this.disposeFileWatchers();
-      smartLog.warn("Smart deploy PAUSED for manual deployment");
+      this.smartLog.warn("Smart deploy PAUSED for manual deployment");
     }
 
     try {
       try {
         this.projectStructure = this.detectProjectStructure();
       } catch (error) {
-        getLogger().warn(
+        this.getLogger().warn(
           "Unable to refresh project structure before deployment",
         );
         if (error) {
-          smartLog.debug(`Project structure detection error: ${error}`);
+          this.smartLog.debug(`Project structure detection error: ${error}`);
         }
       }
 
@@ -1254,15 +1192,15 @@ export class Builder {
       if (this.projectStructure) {
         this.projectStructure.webappName = appName;
       }
-      const tomcatHome = await getTomcat().findTomcatHome();
+      const tomcatHome = await this.getTomcat().findTomcatHome();
 
-      getTomcat().setAppName(appName);
+      this.getTomcat().setAppName(appName);
 
       if (!tomcatHome || !appName) {
         return;
       }
 
-      const webappsRoot = await getTomcat().getWebappsRoot(tomcatHome);
+      const webappsRoot = await this.getTomcat().getWebappsRoot(tomcatHome);
       if (!webappsRoot) {
         return;
       }
@@ -1317,12 +1255,12 @@ export class Builder {
       const duration = Math.round(endTime - startTime);
 
       if (fs.existsSync(targetDir)) {
-        getLogger().success(
+        this.getLogger().success(
           `${buildType} build completed in ${duration}ms`,
           true,
         );
         await new Promise((resolve) => setTimeout(resolve, 100));
-        await getTomcat().reload();
+        await this.getTomcat().reload();
       }
 
       this.attempts = 0;
@@ -1333,13 +1271,13 @@ export class Builder {
         errorMessage.includes("resource busy or locked");
       if (isBusyError && this.attempts < 3) {
         this.attempts++;
-        await getTomcat().stop(false);
+        await this.getTomcat().stop(false);
         // Recursive retry: the inner deploy() call will see autoDeployMode
         // already Disabled and skip its own pause; when it returns, this
         // outer finally will correctly restore the original Smart state.
         await this.deploy(buildType);
       } else {
-        getLogger().error(`${buildType} build failed:`, true, errorMessage);
+        this.getLogger().error(`${buildType} build failed:`, true, errorMessage);
       }
     } finally {
       // ALWAYS restore smart deploy state regardless of how we exited
@@ -1350,12 +1288,12 @@ export class Builder {
         this.autoDeployMode = "Smart";
         // Re-initialize watchers in the background — don't block deployment completion
         this.initializeSmartDeploy().catch((err) =>
-          smartLog.error(
+          this.smartLog.error(
             "Failed to resume smart deploy after manual deployment",
             err as string,
           ),
         );
-        smartLog.warn("Smart deploy RESUMED after manual deployment");
+        this.smartLog.warn("Smart deploy RESUMED after manual deployment");
       }
     }
   }
@@ -1377,27 +1315,10 @@ export class Builder {
 
     // If user explicitly set a preferred type that isn't available, warn and fall back
     if (preferred !== "Auto" && !candidates.includes(preferred)) {
-      smartLog.warn(
+      this.smartLog.warn(
         `Preferred build type "${preferred}" is not available for this project. ` +
           `Available: ${candidates.join(", ")}. Falling back to selection.`,
       );
-    }
-
-    const configuredFallback = vscode.workspace
-      .getConfiguration("turbocat")
-      .get<"Local" | "Maven" | "Gradle" | "PreBuilt">(
-        "autoDeployBuildType",
-        "Local",
-      );
-
-    if (
-      preferred === "Auto" &&
-      configuredFallback &&
-      configuredFallback !== "Local" &&
-      candidates.includes(configuredFallback)
-    ) {
-      await this.persistPreferredBuildType(configuredFallback);
-      return configuredFallback;
     }
 
     if (candidates.length === 1) {
@@ -1472,13 +1393,11 @@ export class Builder {
     value: "Local" | "Maven" | "Gradle" | "PreBuilt",
   ): Promise<void> {
     this.preferredBuildType = value;
-    await vscode.workspace
-      .getConfiguration()
-      .update(
-        "turbocat.preferredBuildType",
-        value,
-        vscode.ConfigurationTarget.Workspace,
-      );
+    await this.getConfiguration().update(
+      "preferredBuildType",
+      value,
+      vscode.ConfigurationTarget.WorkspaceFolder,
+    );
   }
 
   /**
@@ -1508,7 +1427,7 @@ export class Builder {
         // This ensures smart deploy is initialized if not already
         if (!this.projectStructure) {
           this.initializeSmartDeploy().catch((error) =>
-            smartLog.error(
+            this.smartLog.error(
               "Failed to initialize smart deploy",
               error as string,
             ),
@@ -1530,22 +1449,23 @@ export class Builder {
    */
   public async initializeSmartDeploy(): Promise<void> {
     // Update autoDeployMode from config to ensure it's current
-    this.autoDeployMode = vscode.workspace
-      .getConfiguration()
-      .get("turbocat.smartDeploy", "Disable") as "Disable" | "Smart";
+    this.autoDeployMode = this.getConfiguration().get(
+      "smartDeploy",
+      "Disable",
+    ) as "Disable" | "Smart";
 
     if (this.autoDeployMode !== "Smart") {
-      smartLog.debug("Smart deploy not initialized - mode is not Smart");
+      this.smartLog.debug("Smart deploy not initialized - mode is not Smart");
       return;
     }
 
     try {
-      smartLog.debug("Initializing hybrid smart deploy system...");
+      this.smartLog.debug("Initializing hybrid smart deploy system...");
 
       // Check current workspace
       const workspaceFolders = vscode.workspace.workspaceFolders;
       if (!workspaceFolders || workspaceFolders.length === 0) {
-        smartLog.error("Smart deploy requires an open workspace");
+        this.smartLog.error("Smart deploy requires an open workspace");
         return;
       }
 
@@ -1555,7 +1475,7 @@ export class Builder {
       // Detect project structure SECOND — this may merge WTP mappings
       // into the already-loaded config (in-memory only; sufficient for runtime)
       this.projectStructure = this.detectProjectStructure();
-      smartLog.debug(
+      this.smartLog.debug(
         `Detected project structure: ${JSON.stringify(this.projectStructure)}`,
       );
 
@@ -1575,20 +1495,21 @@ export class Builder {
       const projectType = this.projectStructure.type;
       const javaOut = this.projectStructure.javaOutputDir;
       const infoSummary = `Smart deploy ready • ${projectType} project • webapp: ${this.projectStructure.webappName} • mappings: ${this.compiledMappings.length}`;
-      smartLog.success(infoSummary);
-      smartLog.debug(`Smart deploy config file: ${Builder.CONFIG_FILE}`);
-      smartLog.debug(`Java output directory: ${javaOut}`);
+      this.smartLog.success(infoSummary);
+      this.smartLog.debug(`Smart deploy config file: ${Builder.CONFIG_FILE}`);
+      this.smartLog.debug(`Java output directory: ${javaOut}`);
 
-      const showLog = vscode.workspace
-        .getConfiguration("turbocat")
-        .get<boolean>("turbocat.showSmartDeployLog", true);
+      const showLog = this.getConfiguration().get<boolean>(
+        "showSmartDeployLog",
+        true,
+      );
       if (!showLog) {
-        smartLog.warn(
+        this.smartLog.warn(
           "Smart deploy log visibility is OFF (turbocat.showSmartDeployLog=false). Deployment confirmations will still appear, but debug details are hidden.",
         );
       }
     } catch (error) {
-      smartLog.error("Failed to initialize smart deploy", error as string);
+      this.smartLog.error("Failed to initialize smart deploy", error as string);
     }
   }
 
@@ -1605,17 +1526,17 @@ export class Builder {
    *    - Handles compiled Java classes
    */
   private setupDualFileWatchers(): void {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      smartLog.debug("Dual watcher setup failed: No workspace root");
+      this.smartLog.debug("Dual watcher setup failed: No workspace root");
       return;
     }
 
     // Dispose existing watchers
     this.disposeFileWatchers();
 
-    smartLog.info("Setting up dual-watcher smart deploy watchers");
-    smartLog.debug(
+    this.smartLog.info("Setting up dual-watcher smart deploy watchers");
+    this.smartLog.debug(
       "Features: static resources (immediate) + compiled classes (delayed)",
     );
 
@@ -1625,7 +1546,7 @@ export class Builder {
     // 2. Compiled File Watcher - target/classes/**/*.class or build/classes/**/*.class
     this.setupCompiledFileWatcher(workspaceRoot);
 
-    smartLog.success("Dual-watcher smart deploy setup complete");
+    this.smartLog.success("Dual-watcher smart deploy setup complete");
   }
 
   /**
@@ -1668,7 +1589,7 @@ export class Builder {
       const absolute = path.join(workspaceRoot, normalized);
 
       if (!fs.existsSync(absolute)) {
-        smartLog.debug(
+        this.smartLog.debug(
           `Skipping static watcher for ${normalized} (directory not found)`,
         );
         return;
@@ -1678,8 +1599,8 @@ export class Builder {
       const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-      smartLog.debug(`Static resource watcher: ${absolute}`);
-      smartLog.debug("Strategy: immediate deployment for web resources");
+      this.smartLog.debug(`Static resource watcher: ${absolute}`);
+      this.smartLog.debug("Strategy: immediate deployment for web resources");
 
       watcher.onDidChange((uri: vscode.Uri) =>
         this.handleStaticResourceChange(uri, "change"),
@@ -1696,11 +1617,11 @@ export class Builder {
     });
 
     if (!watcherCreated) {
-      smartLog.warn(
+      this.smartLog.warn(
         "No static resource watcher configured. Verify resource directories exist.",
       );
     } else {
-      smartLog.info("Static resource watcher ready");
+      this.smartLog.info("Static resource watcher ready");
     }
   }
 
@@ -1743,7 +1664,7 @@ export class Builder {
       const absolute = path.join(workspaceRoot, normalized);
 
       if (!fs.existsSync(absolute)) {
-        smartLog.debug(
+        this.smartLog.debug(
           `Skipping compiled watcher for ${normalized} (directory not found)`,
         );
         return;
@@ -1753,8 +1674,8 @@ export class Builder {
       const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-      smartLog.debug(`Compiled file watcher: ${absolute}`);
-      smartLog.debug("Strategy: delayed deployment for compiled classes");
+      this.smartLog.debug(`Compiled file watcher: ${absolute}`);
+      this.smartLog.debug("Strategy: delayed deployment for compiled classes");
 
       watcher.onDidChange((uri: vscode.Uri) =>
         this.handleCompiledFileChange(uri, "change"),
@@ -1771,11 +1692,11 @@ export class Builder {
     });
 
     if (!watcherCreated) {
-      smartLog.warn(
+      this.smartLog.warn(
         "No compiled file watcher configured. Verify build output directories exist.",
       );
     } else {
-      smartLog.info("Compiled file watcher ready");
+      this.smartLog.info("Compiled file watcher ready");
     }
   }
 
@@ -1804,7 +1725,7 @@ export class Builder {
     const fileExt = path.extname(uri.fsPath).toLowerCase();
 
     if (this.shouldBypassFile(uri.fsPath)) {
-      smartLog.debug(`Bypassing sync for file: ${fileName}`);
+      this.smartLog.debug(`Bypassing sync for file: ${fileName}`);
       return;
     }
 
@@ -1815,13 +1736,13 @@ export class Builder {
       fileName.endsWith(".temp") ||
       fileExt === ".svn"
     ) {
-      smartLog.debug(`Skipping file: ${fileName} (temp/hidden file)`);
+      this.smartLog.debug(`Skipping file: ${fileName} (temp/hidden file)`);
       return;
     }
 
     // Handle Java files - trigger compilation check
     if (fileExt === ".java") {
-      smartLog.debug(
+      this.smartLog.debug(
         `Java file ${eventType}: ${fileName} - triggering compilation check`,
       );
       this.handleJavaFileChange(uri.fsPath, eventType);
@@ -1829,13 +1750,13 @@ export class Builder {
     }
 
     // Get relative path from workspace root
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
 
     const relativePath = path.relative(workspaceRoot, uri.fsPath);
-    smartLog.debug(
+    this.smartLog.debug(
       `Static resource ${eventType}: ${fileName} (${relativePath})`,
     );
 
@@ -1850,25 +1771,26 @@ export class Builder {
     javaFilePath: string,
     _eventType: "change" | "create" | "delete",
   ): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
 
     const fileName = path.basename(javaFilePath, ".java");
     const relativePath = path.relative(workspaceRoot, javaFilePath);
-    smartLog.debug(`Java source ${fileName}.java changed (${relativePath})`);
+    this.smartLog.debug(`Java source ${fileName}.java changed (${relativePath})`);
 
     // Single delayed check - wait for compilation to complete
-    const debounceMs = vscode.workspace
-      .getConfiguration("turbocat")
-      .get<number>("smartDeployDebounce", 300);
+    const debounceMs = this.getConfiguration().get<number>(
+      "smartDeployDebounce",
+      300,
+    );
     setTimeout(
       async () => {
         try {
           await this.checkAndDeployCompiledClass(javaFilePath, fileName);
         } catch (error) {
-          smartLog.debug(
+          this.smartLog.debug(
             `Compilation check failed for ${fileName}.java: ${error}`,
           );
         }
@@ -1885,7 +1807,7 @@ export class Builder {
     javaFilePath: string,
     className: string,
   ): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot || !this.projectStructure) {
       return;
     }
@@ -1894,7 +1816,7 @@ export class Builder {
     const existingOutputDirs = outputDirs.filter((dir) => fs.existsSync(dir));
 
     if (!existingOutputDirs.length) {
-      smartLog.debug(
+      this.smartLog.debug(
         `No compiled output directories found. Checked: ${outputDirs.join(", ") || "none"}`,
       );
       return;
@@ -1950,11 +1872,11 @@ export class Builder {
       const classFiles = Array.from(allMatches);
 
       if (classFiles.length === 0) {
-        smartLog.debug(`No compiled classes found for ${className}.java`);
+        this.smartLog.debug(`No compiled classes found for ${className}.java`);
         return;
       }
 
-      smartLog.info(
+      this.smartLog.info(
         `Queued ${classFiles.length} compiled classes for ${className}.java`,
       );
 
@@ -1965,22 +1887,22 @@ export class Builder {
       ).length;
       const packageCount = classFiles.length - directCount - recentCount;
 
-      smartLog.debug(
+      this.smartLog.debug(
         `Direct matches: ${directCount}, Recent changes: ${recentCount}, Package related: ${packageCount}`,
       );
 
       // Add all found class files to batch deployment
       for (const classFile of classFiles) {
         const relativePath = path.relative(workspaceRoot, classFile);
-        smartLog.debug(`Queuing class file: ${relativePath}`);
+        this.smartLog.debug(`Queuing class file: ${relativePath}`);
         this.addToBatchDeployment(classFile, "change");
       }
 
-      smartLog.debug(
+      this.smartLog.debug(
         `Added ${classFiles.length} compiled classes to batch deployment`,
       );
     } catch (error) {
-      smartLog.warn(`Failed to scan for compiled classes: ${error}`);
+      this.smartLog.warn(`Failed to scan for compiled classes: ${error}`);
     }
   }
 
@@ -2060,7 +1982,7 @@ export class Builder {
 
       return recentFiles;
     } catch (error) {
-      smartLog.debug(`Error finding recently modified classes: ${error}`);
+      this.smartLog.debug(`Error finding recently modified classes: ${error}`);
       return [];
     }
   }
@@ -2107,7 +2029,7 @@ export class Builder {
 
         if (relatedFiles.length > 1) {
           // More than just the main class
-          smartLog.debug(
+          this.smartLog.debug(
             `Found ${relatedFiles.length} potentially related classes in package: ${packageName}`,
           );
         }
@@ -2115,7 +2037,7 @@ export class Builder {
 
       return relatedFiles;
     } catch (error) {
-      smartLog.debug(`Error finding package-related classes: ${error}`);
+      this.smartLog.debug(`Error finding package-related classes: ${error}`);
       return [];
     }
   }
@@ -2132,24 +2054,24 @@ export class Builder {
     const fileExt = path.extname(uri.fsPath).toLowerCase();
 
     if (this.shouldBypassFile(uri.fsPath)) {
-      smartLog.debug(`Bypassing sync for compiled file: ${fileName}`);
+      this.smartLog.debug(`Bypassing sync for compiled file: ${fileName}`);
       return;
     }
 
     // Only process .class files
     if (fileExt !== ".class") {
-      smartLog.debug(`Skipping non-class file: ${fileName}`);
+      this.smartLog.debug(`Skipping non-class file: ${fileName}`);
       return;
     }
 
     // Get relative path from workspace root
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
 
     const relativePath = path.relative(workspaceRoot, uri.fsPath);
-    smartLog.debug(`Compiled file ${eventType}: ${fileName} (${relativePath})`);
+    this.smartLog.debug(`Compiled file ${eventType}: ${fileName} (${relativePath})`);
 
     // Use batch deployment for compiled files
     this.addToBatchDeployment(uri.fsPath, eventType);
@@ -2197,7 +2119,7 @@ export class Builder {
       const mapping = this.findMatchingMapping(filePath);
       if (!mapping) {
         const fileName = path.basename(filePath);
-        smartLog.debug(`No mapping found for static resource: ${fileName}`);
+        this.smartLog.debug(`No mapping found for static resource: ${fileName}`);
         return;
       }
 
@@ -2205,20 +2127,20 @@ export class Builder {
       const targetPath = await this.generateDestinationPath(mapping, filePath);
       if (!targetPath) {
         const fileName = path.basename(filePath);
-        smartLog.warn(`Failed to generate target path for: ${fileName}`);
+        this.smartLog.warn(`Failed to generate target path for: ${fileName}`);
         return;
       }
 
       await this.copyFileWithLogging(filePath, targetPath, "static");
 
       const fileName = path.basename(filePath);
-      const webappsRoot = await getTomcat().getWebappsRoot();
+      const webappsRoot = await this.getTomcat().getWebappsRoot();
       const relativePath = webappsRoot
         ? path.relative(webappsRoot, targetPath)
         : path.basename(targetPath);
-      smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
+      this.smartLog.info(`Immediate deploy: ${fileName} → ${relativePath}`);
     } catch (error) {
-      smartLog.error(
+      this.smartLog.error(
         `Static resource deployment failed for ${path.basename(filePath)}`,
         error as string,
       );
@@ -2233,14 +2155,15 @@ export class Builder {
     filePath: string,
     eventType: "change" | "create" | "delete",
   ): void {
-    const debounceTime = vscode.workspace
-      .getConfiguration("turbocat")
-      .get<number>("smartDeployDebounce", 300);
+    const debounceTime = this.getConfiguration().get<number>(
+      "smartDeployDebounce",
+      300,
+    );
 
     // Add file to pending batch (using Map to store both path and event type)
     this.pendingCompiledFiles.add(JSON.stringify({ filePath, eventType }));
 
-    smartLog.debug(
+    this.smartLog.debug(
       `Added to batch: ${path.basename(filePath)} (${eventType}) - ${this.pendingCompiledFiles.size} files queued`,
     );
 
@@ -2263,7 +2186,7 @@ export class Builder {
     }
 
     const batchSize = this.pendingCompiledFiles.size;
-    smartLog.info(`Executing batch deployment for ${batchSize} compiled files`);
+    this.smartLog.info(`Executing batch deployment for ${batchSize} compiled files`);
 
     // Convert Set to array and parse file information
     const filesToDeploy = Array.from(this.pendingCompiledFiles).map((item) =>
@@ -2283,7 +2206,7 @@ export class Builder {
         await this.executeCompiledFileDeployment(filePath, eventType);
         successCount++;
       } catch (error) {
-        smartLog.error(
+        this.smartLog.error(
           `Batch deploy failed for ${path.basename(filePath)}`,
           error as string,
         );
@@ -2293,12 +2216,12 @@ export class Builder {
 
     // Log batch results
     if (successCount > 0) {
-      smartLog.info(
+      this.smartLog.info(
         `Batch deployment completed: ${successCount} files deployed`,
       );
     }
     if (errorCount > 0) {
-      smartLog.warn(`Batch deployment had ${errorCount} errors`);
+      this.smartLog.warn(`Batch deployment had ${errorCount} errors`);
     }
 
     // Optional: Trigger single reload after batch deployment instead of per-file
@@ -2310,7 +2233,7 @@ export class Builder {
   // private deployCompiledFileWithDelay(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
   //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
   //
-  //     getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+  //     this.getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
   //
   //     if (this.compiledFileDebouncer.has(filePath)) {
   //         clearTimeout(this.compiledFileDebouncer.get(filePath)!);
@@ -2320,7 +2243,7 @@ export class Builder {
   //         try {
   //             await this.executeCompiledFileDeployment(filePath, eventType);
   //         } catch (error) {
-  //             getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
+  //             this.getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
   //         } finally {
   //             this.compiledFileDebouncer.delete(filePath);
   //         }
@@ -2342,8 +2265,8 @@ export class Builder {
     // Find matching mapping for the compiled .class file
     const mapping = this.findMatchingMapping(filePath);
     if (!mapping) {
-      smartLog.debug(
-        `No mapping found for compiled class: ${path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "", filePath)}`,
+      this.smartLog.debug(
+        `No mapping found for compiled class: ${path.relative(this.getWorkspaceRoot() || "", filePath)}`,
       );
       return;
     }
@@ -2351,7 +2274,7 @@ export class Builder {
     // Generate destination path using mapping configuration
     const targetPath = await this.generateDestinationPath(mapping, filePath);
     if (!targetPath) {
-      smartLog.warn(
+      this.smartLog.warn(
         `Failed to generate target path for: ${path.basename(filePath)}`,
       );
       return;
@@ -2360,11 +2283,11 @@ export class Builder {
     await this.copyFileWithLogging(filePath, targetPath, "class");
 
     const fileName = path.basename(filePath);
-    const webappsRoot = await getTomcat().getWebappsRoot();
+    const webappsRoot = await this.getTomcat().getWebappsRoot();
     const relativePath = webappsRoot
       ? path.relative(webappsRoot, targetPath)
       : path.basename(targetPath);
-    smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
+    this.smartLog.info(`Class deploy: ${fileName} → ${relativePath}`);
   }
 
   private async removeDeployedFile(
@@ -2373,7 +2296,7 @@ export class Builder {
   ): Promise<void> {
     const mapping = this.findMatchingMapping(filePath);
     if (!mapping) {
-      smartLog.debug(
+      this.smartLog.debug(
         `No mapping found for deleted ${type} file: ${path.basename(filePath)}`,
       );
       return;
@@ -2383,25 +2306,25 @@ export class Builder {
       ensureParent: false,
     });
     if (!targetPath) {
-      smartLog.warn(
+      this.smartLog.warn(
         `Failed to generate delete target for: ${path.basename(filePath)}`,
       );
       return;
     }
 
     if (!fs.existsSync(targetPath)) {
-      smartLog.debug(
+      this.smartLog.debug(
         `Deployed ${type} file already absent: ${path.basename(targetPath)}`,
       );
       return;
     }
 
-    fs.rmSync(targetPath, { force: true });
-    const webappsRoot = await getTomcat().getWebappsRoot();
+    await fsp.rm(targetPath, { force: true });
+    const webappsRoot = await this.getTomcat().getWebappsRoot();
     const relativePath = webappsRoot
       ? path.relative(webappsRoot, targetPath)
       : path.basename(targetPath);
-    smartLog.info(`Removed deployed ${type}: ${relativePath}`);
+    this.smartLog.info(`Removed deployed ${type}: ${relativePath}`);
   }
 
   // LEGACY: Old debounced deploy method (commented out)
@@ -2409,7 +2332,7 @@ export class Builder {
   //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
   //
   //     // Debug log to verify configuration is being read correctly
-  //     getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
+  //     this.getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
   //
   //     if (this.deployDebouncer.has(filePath)) {
   //         clearTimeout(this.deployDebouncer.get(filePath)!);
@@ -2419,7 +2342,7 @@ export class Builder {
   //         try {
   //             await deployFn();
   //         } catch (error) {
-  //             getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
+  //             this.getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
   //         } finally {
   //             this.deployDebouncer.delete(filePath);
   //         }
@@ -2437,7 +2360,7 @@ export class Builder {
     try {
       // Check if source file exists
       if (!fs.existsSync(source)) {
-        smartLog.warn(
+        this.smartLog.warn(
           `Smart deploy: Source file not found: ${path.basename(source)}`,
         );
         return;
@@ -2445,12 +2368,10 @@ export class Builder {
 
       // Ensure target directory exists
       const targetDir = path.dirname(target);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
+      await fsp.mkdir(targetDir, { recursive: true });
 
       // Copy the file
-      fs.copyFileSync(source, target);
+      await fsp.copyFile(source, target);
 
       const fileName = path.basename(source);
       const label =
@@ -2459,7 +2380,7 @@ export class Builder {
           : type === "static"
             ? "Smart deployed static"
             : "Local mapping synced";
-      smartLog.debug(`${label}: ${fileName}`);
+      this.smartLog.debug(`${label}: ${fileName}`);
     } catch (error) {
       throw error;
     }
@@ -2501,7 +2422,7 @@ export class Builder {
     }
     this.pendingCompiledFiles.clear();
 
-    smartLog.debug("Smart deploy cleanup: All watchers and timers disposed");
+    this.smartLog.debug("Smart deploy cleanup: All watchers and timers disposed");
   }
 
   /**
@@ -2509,17 +2430,17 @@ export class Builder {
    */
   public async testDualWatcherDeploy(): Promise<void> {
     if (!this.projectStructure) {
-      smartLog.debug("Test deploy: No project structure found");
+      this.smartLog.debug("Test deploy: No project structure found");
       return;
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      smartLog.debug("Test deploy: No workspace root found");
+      this.smartLog.debug("Test deploy: No workspace root found");
       return;
     }
 
-    smartLog.info("🧪 Testing dual-watcher deployment system...");
+    this.smartLog.info("🧪 Testing dual-watcher deployment system...");
 
     try {
       // Test static resource deployment
@@ -2528,11 +2449,11 @@ export class Builder {
         const staticFiles = await this.findFiles(
           path.join(srcPath, "**", "*.{html,css,js,jsp}"),
         );
-        smartLog.debug(`Test deploy: Found ${staticFiles.length} static files`);
+        this.smartLog.debug(`Test deploy: Found ${staticFiles.length} static files`);
 
         for (const file of staticFiles.slice(0, 1)) {
           // Test with first file
-          smartLog.debug(`Test static deploy: Processing ${file}`);
+          this.smartLog.debug(`Test static deploy: Processing ${file}`);
           const uri = vscode.Uri.file(file);
           this.handleStaticResourceChange(uri, "create");
         }
@@ -2547,16 +2468,16 @@ export class Builder {
         const classFiles = await this.findFiles(
           path.join(targetPath, "**", "*.class"),
         );
-        smartLog.debug(`Test deploy: Found ${classFiles.length} class files`);
+        this.smartLog.debug(`Test deploy: Found ${classFiles.length} class files`);
 
         // Simulate multiple class files changing at once (batch scenario)
         const testFiles = classFiles.slice(0, Math.min(3, classFiles.length));
-        smartLog.info(
+        this.smartLog.info(
           `🧪 Simulating batch change: ${testFiles.length} class files`,
         );
 
         testFiles.forEach((file, index) => {
-          smartLog.debug(
+          this.smartLog.debug(
             `Test batch compile deploy ${index + 1}: Processing ${file}`,
           );
           const uri = vscode.Uri.file(file);
@@ -2565,15 +2486,15 @@ export class Builder {
         });
 
         if (testFiles.length > 1) {
-          smartLog.info(
-            `⏱️ Batch processing will execute in ${vscode.workspace.getConfiguration("turbocat").get<number>("smartDeployDebounce", 300)}ms...`,
+          this.smartLog.info(
+            `⏱️ Batch processing will execute in ${this.getConfiguration().get<number>("smartDeployDebounce", 300)}ms...`,
           );
         }
       }
 
-      smartLog.info("✅ Dual-watcher deployment test completed");
+      this.smartLog.info("✅ Dual-watcher deployment test completed");
     } catch (error) {
-      smartLog.error("Dual-watcher test failed", error as string);
+      this.smartLog.error("Dual-watcher test failed", error as string);
     }
   }
 
@@ -2617,7 +2538,7 @@ export class Builder {
           type: "maven",
           archetype: "maven-archetype-webapp",
         });
-        getLogger().info("New Maven web app project created");
+        this.getLogger().info("New Maven web app project created");
       } catch (err) {
         vscode.window
           .showErrorMessage(
@@ -2633,7 +2554,7 @@ export class Builder {
           });
       }
     } else {
-      getLogger().success("Tomcat deploy canceled", true);
+      this.getLogger().success("Tomcat deploy canceled", true);
     }
   }
 
@@ -2676,7 +2597,7 @@ export class Builder {
         `Web resource directory not found. Checked: ${webResourceCandidates.join(", ")}`,
       );
     }
-    const javaHome = await getTomcat().findJavaHome();
+    const javaHome = await this.getTomcat().findJavaHome();
     if (!javaHome) {
       return;
     }
@@ -2687,11 +2608,14 @@ export class Builder {
     const classesDir = path.join(targetDir, "WEB-INF", "classes");
 
     report("Synchronizing web resources...", 25);
-    this.brutalSync(webAppPath, targetDir, true);
+    await DirectorySynchronizer.sync(webAppPath, targetDir, {
+      preserveRuntimeFolders: true,
+      onCleanupError: (message) => this.smartLog.debug(message),
+    });
 
     report("Refreshing compiled output...", 10);
-    fs.rmSync(classesDir, { force: true, recursive: true });
-    fs.mkdirSync(classesDir, { recursive: true });
+    await fsp.rm(classesDir, { force: true, recursive: true });
+    await fsp.mkdir(classesDir, { recursive: true });
 
     const javaSourceRoots =
       structure.javaSourceRoots && structure.javaSourceRoots.length > 0
@@ -2741,7 +2665,7 @@ export class Builder {
         }
       }
       if (eclipseLibs.length > 0) {
-        smartLog.debug(
+        this.smartLog.debug(
           `Added ${eclipseLibs.length} Eclipse .classpath libraries to javac classpath`,
         );
       }
@@ -2749,13 +2673,13 @@ export class Builder {
       const classpath = Array.from(classpathEntries).join(path.delimiter);
       const compileTargets = Array.from(javaFiles);
 
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "turbocat-javac-"));
+      const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "turbocat-javac-"));
       const argsFile = path.join(tempDir, "sources.args");
       const argsFileContent = compileTargets
         .map((filePath) => `"${filePath.replace(/"/g, '\\"')}"`)
         .join(os.EOL);
 
-      fs.writeFileSync(argsFile, argsFileContent, "utf8");
+      await fsp.writeFile(argsFile, argsFileContent, "utf8");
 
       const javacArgs: string[] = [];
       if (this.compileEncoding) {
@@ -2766,7 +2690,7 @@ export class Builder {
       try {
         await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
       } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        await fsp.rm(tempDir, { recursive: true, force: true });
       }
     } else {
       report("No Java sources detected, skipping compilation", 35);
@@ -2779,7 +2703,7 @@ export class Builder {
     const targetLib = path.join(targetDir, "WEB-INF", "lib");
     if (fs.existsSync(libDir)) {
       report("Updating libraries...", 10);
-      this.brutalSync(libDir, targetLib);
+      await DirectorySynchronizer.sync(libDir, targetLib);
     } else {
       report("Library updates skipped", 10);
     }
@@ -2787,7 +2711,7 @@ export class Builder {
     report("Local deployment complete", 0);
 
     // Ensure META-INF exists with MANIFEST.MF (normally generated by Maven)
-    this.ensureMetaInf(
+    await this.ensureMetaInf(
       path.join(targetDir, "META-INF"),
       path.basename(targetDir),
     );
@@ -2797,12 +2721,12 @@ export class Builder {
    * Apply additional local deploy mappings defined in the workspace configuration.
    */
   private async applyLocalDeployMappings(): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
 
-    const tomcatHome = await getTomcat().findTomcatHome();
+    const tomcatHome = await this.getTomcat().findTomcatHome();
     if (!tomcatHome) {
       return;
     }
@@ -2837,7 +2761,7 @@ export class Builder {
         });
 
         if (!matches.length) {
-          smartLog.debug(
+          this.smartLog.debug(
             `Local deploy mapping "${mapping.source}" did not match any files.`,
           );
           continue;
@@ -2867,7 +2791,7 @@ export class Builder {
         }
       }
     } catch (error) {
-      smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
+      this.smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
     }
   }
 
@@ -2922,9 +2846,12 @@ export class Builder {
     ];
     const webAppPath = this.findFirstExistingPath(projectDir, webAppCandidates);
     if (webAppPath) {
-      this.brutalSync(webAppPath, targetDir, true);
+      await DirectorySynchronizer.sync(webAppPath, targetDir, {
+        preserveRuntimeFolders: true,
+        onCleanupError: (message) => this.smartLog.debug(message),
+      });
     } else if (!isMaven) {
-      smartLog.warn(
+      this.smartLog.warn(
         "PreBuilt: no web resource directory found. Checked: " +
           webAppCandidates.join(", "),
       );
@@ -2932,16 +2859,16 @@ export class Builder {
 
     report("Copying compiled classes...", 30);
     const targetClassesDir = path.join(targetDir, "WEB-INF", "classes");
-    this.brutalSync(classesDir, targetClassesDir);
+    await DirectorySynchronizer.sync(classesDir, targetClassesDir);
 
-    const classCount = this.countFilesRecursive(targetClassesDir);
+    const classCount = await this.countFilesRecursive(targetClassesDir);
     if (classCount === 0) {
-      smartLog.warn(
+      this.smartLog.warn(
         `PreBuilt: no class files deployed to ${targetClassesDir}. ` +
           `Source ${classesDir} may be empty.`,
       );
     } else {
-      smartLog.info(
+      this.smartLog.info(
         `PreBuilt: deployed ${classCount} compiled files to WEB-INF/classes`,
       );
     }
@@ -2951,12 +2878,12 @@ export class Builder {
     if (isMaven) {
       const depLibDir = path.join(projectDir, "target", "dependency");
       if (fs.existsSync(depLibDir)) {
-        this.brutalSync(depLibDir, targetLibDir);
+        await DirectorySynchronizer.sync(depLibDir, targetLibDir);
       }
     }
     const projectLibDir = path.join(projectDir, "lib");
     if (fs.existsSync(projectLibDir)) {
-      this.brutalSync(projectLibDir, targetLibDir);
+      await DirectorySynchronizer.sync(projectLibDir, targetLibDir);
     }
 
     report("Applying workspace mappings...", 10);
@@ -2964,7 +2891,7 @@ export class Builder {
 
     report("Pre-built deployment complete", 0);
 
-    this.ensureMetaInf(
+    await this.ensureMetaInf(
       path.join(targetDir, "META-INF"),
       path.basename(targetDir),
     );
@@ -2992,14 +2919,15 @@ export class Builder {
     try {
       // Inject JAVA_HOME from TurboCat config so mvn works even
       // when the system PATH does not include a JDK.
-      const javaHome = await getTomcat().findJavaHome();
-      const mavenHome = vscode.workspace
-        .getConfiguration("turbocat")
-        .get<string>("turbocat.mavenHome", "");
+      const javaHome = await this.getTomcat().findJavaHome();
+      const mavenHome = this.getConfiguration().get<string>(
+        "mavenHome",
+        "",
+      );
       const mvnEnv: Record<string, string> = {};
       if (javaHome && !process.env.JAVA_HOME) {
         mvnEnv["JAVA_HOME"] = javaHome;
-        getLogger().info(`Using JAVA_HOME=${javaHome} for Maven build`);
+        this.getLogger().info(`Using JAVA_HOME=${javaHome} for Maven build`);
       }
       if (mavenHome && !process.env.MAVEN_HOME) {
         mvnEnv["MAVEN_HOME"] = mavenHome;
@@ -3013,10 +2941,11 @@ export class Builder {
             `mvn${process.platform === "win32" ? ".cmd" : ""}`,
           )
         : "mvn";
-      getLogger().info(`Maven command: ${mvnCmd} clean package`);
+      this.getLogger().info(`Maven command: ${mvnCmd} clean package`);
 
-      await this.executeCommand(
-        `${mvnCmd} clean package`,
+      await this.executeCommandSpawn(
+        mvnCmd,
+        ["clean", "package"],
         projectDir,
         Object.keys(mvnEnv).length ? mvnEnv : undefined,
       );
@@ -3025,9 +2954,11 @@ export class Builder {
 
       // Log the full raw output first so it appears in the TurboCat channel
       if (errorOutput.trim()) {
-        getLogger().error(`Maven build failed. Raw output:`, false);
+        this.getLogger().error(`Maven build failed. Raw output:`, false);
         errorOutput.split("\n").forEach((line) => {
-          if (line.trim()) getLogger().appendRawLine(`  ${line.trim()}`);
+          if (line.trim()) {
+            this.getLogger().appendRawLine(`  ${line.trim()}`);
+          }
         });
       }
 
@@ -3058,8 +2989,7 @@ export class Builder {
     }
 
     const targetPath = path.join(projectDir, "target");
-    const warFiles = fs
-      .readdirSync(targetPath)
+    const warFiles = (await fsp.readdir(targetPath))
       .filter((file: string) => file.toLowerCase().endsWith(".war"));
     if (warFiles.length === 0) {
       throw new Error("No WAR file found after Maven build.");
@@ -3071,18 +3001,14 @@ export class Builder {
     const warBaseName = path.basename(warFileName, ".war");
     const warFolderPath = path.join(targetPath, warBaseName);
 
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
-    if (fs.existsSync(`${targetDir}.war`)) {
-      fs.rmSync(`${targetDir}.war`, { force: true });
-    }
+    await fsp.rm(targetDir, { recursive: true, force: true });
+    await fsp.rm(`${targetDir}.war`, { force: true });
 
-    fs.copyFileSync(warFilePath, `${targetDir}.war`);
+    await fsp.copyFile(warFilePath, `${targetDir}.war`);
 
     if (fs.existsSync(warFolderPath)) {
-      fs.mkdirSync(targetDir, { recursive: true });
-      this.copyDirectorySync(warFolderPath, targetDir);
+      await fsp.mkdir(targetDir, { recursive: true });
+      await this.copyDirectory(warFolderPath, targetDir);
     }
   }
 
@@ -3112,8 +3038,9 @@ export class Builder {
 
     const gradleCmd =
       process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-    await this.executeCommand(
-      `${gradleCmd} war -PfinalName=${appName}`,
+    await this.executeCommandSpawn(
+      gradleCmd,
+      ["war", `-PfinalName=${appName}`],
       projectDir,
     );
 
@@ -3122,9 +3049,9 @@ export class Builder {
       throw new Error("No WAR file found after Gradle build.");
     }
 
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    fs.rmSync(`${targetDir}.war`, { recursive: true, force: true });
-    fs.copyFileSync(warFile, `${targetDir}.war`);
+    await fsp.rm(targetDir, { recursive: true, force: true });
+    await fsp.rm(`${targetDir}.war`, { recursive: true, force: true });
+    await fsp.copyFile(warFile, `${targetDir}.war`);
   }
 
   /**
@@ -3162,31 +3089,6 @@ export class Builder {
    * @returns Promise resolving on success, rejecting on error
    * @throws Error if command execution fails
    */
-  private async executeCommand(
-    command: string,
-    cwd: string,
-    extraEnv?: Record<string, string>,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const options: { cwd: string; env?: Record<string, string> } = { cwd };
-      if (extraEnv) {
-        options.env = {
-          ...(process.env as Record<string, string>),
-          ...extraEnv,
-        };
-      }
-      exec(command, options, (err, stdout, stderr) => {
-        if (err) {
-          // Maven writes errors to stderr, so combine both streams
-          const combined = [stderr, stdout].filter(Boolean).join("\n");
-          reject(combined || err.message || "Unknown error.");
-          return;
-        }
-        resolve();
-      });
-    });
-  }
-
   /**
    * Spawn-based command execution for commands with paths that may contain spaces.
    * Passes arguments as an array so the shell does not misinterpret whitespace.
@@ -3195,30 +3097,9 @@ export class Builder {
     command: string,
     args: string[],
     cwd: string,
+    extraEnv?: Record<string, string>,
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(command, args, {
-        cwd,
-        stdio: "pipe",
-        shell: false,
-      });
-      let stderr = "";
-      child.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(
-            new Error(stderr.trim() || `Command exited with code \${code}`),
-          );
-        }
-      });
-      child.on("error", (err) => {
-        reject(err);
-      });
-    });
+    return CommandRunner.execute(command, args, cwd, extraEnv);
   }
 
   /**
@@ -3259,30 +3140,27 @@ export class Builder {
    * @param dest Target directory path
    * @throws Error if directory copy fails
    */
-  private copyDirectorySync(src: string, dest: string) {
-    if (!fs.existsSync(dest)) {
-      fs.mkdirSync(dest, { recursive: true });
-    }
-
-    const entries = fs.readdirSync(src, { withFileTypes: true });
+  private async copyDirectory(src: string, dest: string): Promise<void> {
+    await fsp.mkdir(dest, { recursive: true });
+    const entries = await fsp.readdir(src, { withFileTypes: true });
 
     for (const entry of entries) {
       const srcPath = path.join(src, entry.name);
       const destPath = path.join(dest, entry.name);
 
       try {
-        fs.rmSync(destPath, { force: true, recursive: true });
+        await fsp.rm(destPath, { force: true, recursive: true });
       } catch (e) {
-        smartLog.debug(`Failed to remove ${destPath}: ${e}`);
+        this.smartLog.debug(`Failed to remove ${destPath}: ${e}`);
       }
 
       if (entry.isDirectory()) {
-        this.copyDirectorySync(srcPath, destPath);
+        await this.copyDirectory(srcPath, destPath);
       } else {
         try {
-          fs.copyFileSync(srcPath, destPath);
+          await fsp.copyFile(srcPath, destPath);
         } catch (e) {
-          smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
+          this.smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
         }
       }
     }
@@ -3291,15 +3169,15 @@ export class Builder {
   /**
    * Count files recursively (helper for pre-built deploy verification).
    */
-  private countFilesRecursive(dir: string): number {
+  private async countFilesRecursive(dir: string): Promise<number> {
     if (!fs.existsSync(dir)) {
       return 0;
     }
     let count = 0;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        count += this.countFilesRecursive(path.join(dir, entry.name));
+        count += await this.countFilesRecursive(path.join(dir, entry.name));
       } else {
         count++;
       }
@@ -3312,10 +3190,8 @@ export class Builder {
    * minimal MANIFEST.MF. Normally created by Maven's package phase;
    * PreBuilt and Local deploys skip Maven so this compensates.
    */
-  private ensureMetaInf(metaInfPath: string, appName: string): void {
-    if (!fs.existsSync(metaInfPath)) {
-      fs.mkdirSync(metaInfPath, { recursive: true });
-    }
+  private async ensureMetaInf(metaInfPath: string, appName: string): Promise<void> {
+    await fsp.mkdir(metaInfPath, { recursive: true });
     const manifestPath = path.join(metaInfPath, "MANIFEST.MF");
     if (!fs.existsSync(manifestPath)) {
       const manifest = [
@@ -3324,8 +3200,8 @@ export class Builder {
         `Implementation-Version: 1.0`,
         "",
       ].join("\n");
-      fs.writeFileSync(manifestPath, manifest, "utf-8");
-      smartLog.info("Generated META-INF/MANIFEST.MF for deployed webapp");
+      await fsp.writeFile(manifestPath, manifest, "utf-8");
+      this.smartLog.info("Generated META-INF/MANIFEST.MF for deployed webapp");
     }
   }
 
@@ -3355,43 +3231,6 @@ export class Builder {
    * @param dest Target directory path (will be created/cleaned)
    * @throws Error if critical filesystem operations fail
    */
-  private brutalSync(src: string, dest: string, restricted: boolean = false) {
-    if (fs.existsSync(dest)) {
-      const keepers = new Set(fs.readdirSync(src));
-      const restrictedFolders = ["classes", "lib"];
-      fs.readdirSync(dest).forEach((f) => {
-        const fullPath = path.join(dest, f);
-        if (
-          !keepers.has(f) &&
-          (!restricted ? true : !restrictedFolders.includes(f))
-        ) {
-          try {
-            fs.rmSync(fullPath, { force: true, recursive: true });
-          } catch (e) {
-            smartLog.debug(`Failed to clean ${fullPath}: ${e}`);
-          }
-        }
-      });
-    }
-
-    fs.mkdirSync(dest, { recursive: true });
-    fs.readdirSync(src, { withFileTypes: true }).forEach((entry) => {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
-
-      if (entry.isDirectory()) {
-        this.brutalSync(srcPath, destPath, restricted);
-      } else {
-        try {
-          fs.copyFileSync(srcPath, destPath);
-        } catch {
-          fs.rmSync(destPath, { force: true });
-          fs.copyFileSync(srcPath, destPath);
-        }
-      }
-    });
-  }
-
   /**
    * Enhanced Smart Deploy Configuration Management
    */
@@ -3400,7 +3239,7 @@ export class Builder {
    * Load or create smart deploy configuration
    */
   private async loadSmartDeployConfig(): Promise<SmartDeployConfig> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       throw new Error("No workspace folder found");
     }
@@ -3408,10 +3247,10 @@ export class Builder {
     const configPath = path.join(workspaceRoot, Builder.CONFIG_FILE);
 
     // Priority 1: Try to load from Maven pom.xml if available
-    const mavenParser = new MavenConfigParser(workspaceRoot);
+    const mavenParser = new MavenConfigParser(workspaceRoot, this.getLogger());
     if (mavenParser.isProjectSupported()) {
       try {
-        smartLog.info("Loading smart deploy configuration from Maven pom.xml");
+        this.smartLog.info("Loading smart deploy configuration from Maven pom.xml");
         const mappings = await mavenParser.parseResourceMappings();
         const webappConfig = await mavenParser.parseWebappConfiguration();
         this.defaultSmartDeployWebappName = webappConfig.webappName;
@@ -3424,20 +3263,21 @@ export class Builder {
           webappName: effectiveWebappName,
           mappings: mappings,
           settings: {
-            debounceTime: vscode.workspace
-              .getConfiguration("turbocat")
-              .get<number>("smartDeployDebounce", 300),
+            debounceTime: this.getConfiguration().get<number>(
+              "smartDeployDebounce",
+              300,
+            ),
             enabled: true,
             logLevel: "info",
           },
         };
 
-        smartLog.info(
+        this.smartLog.info(
           `Loaded smart deploy configuration from Maven pom.xml: ${mappings.length} mappings`,
         );
         return mavenConfig;
       } catch (error) {
-        smartLog.warn(
+        this.smartLog.warn(
           `Failed to parse Maven configuration, falling back to custom/default config: ${error}`,
         );
       }
@@ -3446,7 +3286,7 @@ export class Builder {
     // Priority 2: Try to load from custom config file
     if (fs.existsSync(configPath)) {
       try {
-        const configContent = fs.readFileSync(configPath, "utf-8");
+        const configContent = await fsp.readFile(configPath, "utf-8");
         const config = JSON.parse(configContent) as SmartDeployConfig;
         this.ensureLocalDeployStructure(config);
         this.defaultSmartDeployWebappName = config.webappName;
@@ -3454,12 +3294,12 @@ export class Builder {
           ...config,
           webappName: this.resolveWebappName(this.defaultSmartDeployWebappName),
         };
-        smartLog.info(
+        this.smartLog.info(
           "Loaded smart deploy configuration from custom config file",
         );
         return resolvedConfig;
       } catch (error) {
-        smartLog.warn("Failed to parse smart deploy config, using defaults");
+        this.smartLog.warn("Failed to parse smart deploy config, using defaults");
       }
     }
 
@@ -3476,9 +3316,10 @@ export class Builder {
       webappName: this.projectStructure.webappName,
       mappings: wtpMappings.length > 0 ? wtpMappings : baseMappings,
       settings: {
-        debounceTime: vscode.workspace
-          .getConfiguration("turbocat")
-          .get<number>("smartDeployDebounce", 300),
+        debounceTime: this.getConfiguration().get<number>(
+          "smartDeployDebounce",
+          300,
+        ),
         enabled: true,
         logLevel: "info",
       },
@@ -3488,7 +3329,7 @@ export class Builder {
 
     // Save default configuration
     await this.saveSmartDeployConfig(defaultConfig);
-    smartLog.info("Created default smart deploy configuration");
+    this.smartLog.info("Created default smart deploy configuration");
     return defaultConfig;
   }
 
@@ -3498,7 +3339,7 @@ export class Builder {
   private async saveSmartDeployConfig(
     config: SmartDeployConfig,
   ): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
@@ -3507,20 +3348,18 @@ export class Builder {
     const configDir = path.dirname(configPath);
 
     // Ensure .vscode directory exists
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
+    await fsp.mkdir(configDir, { recursive: true });
 
     // Write configuration file
     const configJson = JSON.stringify(config, null, 2);
-    fs.writeFileSync(configPath, configJson, "utf-8");
+    await fsp.writeFile(configPath, configJson, "utf-8");
   }
 
   /**
    * Compile mappings for runtime efficiency with cross-platform support
    */
   private compileMappings(config: SmartDeployConfig): CompiledMapping[] {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return [];
     }
@@ -3537,7 +3376,7 @@ export class Builder {
       // Anchor the pattern to match from start to end
       const sourceRegex = new RegExp(`^${regexPattern}$`);
 
-      smartLog.debug(
+      this.smartLog.debug(
         `[${process.platform}] Compiled mapping: "${mapping.source}" -> regex: ${sourceRegex} (origin: ${origin})`,
       );
 
@@ -3569,7 +3408,7 @@ export class Builder {
     ) => {
       const key = `${mapping.source}|${mapping.destination}`;
       if (seen.has(key)) {
-        smartLog.debug(
+        this.smartLog.debug(
           `Skipping duplicate mapping override for ${mapping.source} → ${mapping.destination} (${origin})`,
         );
         return;
@@ -3670,7 +3509,7 @@ export class Builder {
   }
 
   private resolveCompiledOutputDirectories(): string[] {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return [];
     }
@@ -3746,36 +3585,7 @@ export class Builder {
    * Convert glob pattern to regex with proper cross-platform support
    */
   private globToRegex(globPattern: string): string {
-    // Platform-specific path separator handling
-    const isWindows = process.platform === "win32";
-    const pathSeparator = isWindows ? "\\\\" : "/";
-    const pathSeparatorClass = isWindows ? "[\\\\\\/]" : "\\/";
-
-    smartLog.debug(`[${process.platform}] Converting glob: "${globPattern}"`);
-
-    let regexPattern = globPattern
-      // First, handle glob patterns by replacing with placeholders
-      .replace(/\*\*/g, "__DOUBLESTAR__")
-      .replace(/\*/g, "__SINGLESTAR__")
-      .replace(/\?/g, "__QUESTION__")
-      // Escape regex special characters
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      // Make **/<filename> match files at root level (zero directories)
-      .replace(
-        /__DOUBLESTAR__\/__SINGLESTAR__/g,
-        "(__DOUBLESTAR__/)?__SINGLESTAR__",
-      )
-      // Convert glob placeholders to regex patterns
-      .replace(/__DOUBLESTAR__/g, ".*") // ** -> match any characters including path separators
-      .replace(/__SINGLESTAR__/g, `[^${pathSeparator}]*`) // * -> match any characters except path separators
-      .replace(/__QUESTION__/g, `[^${pathSeparator}]`); // ? -> match single character except path separators
-
-    // Convert forward slashes to platform-specific path separator pattern
-    regexPattern = regexPattern.replace(/\//g, pathSeparatorClass);
-
-    smartLog.debug(`[${process.platform}] Regex result: "${regexPattern}"`);
-
-    return regexPattern;
+    return globToRegex(globPattern);
   }
 
   /**
@@ -3786,7 +3596,7 @@ export class Builder {
       return null;
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return null;
     }
@@ -3814,12 +3624,12 @@ export class Builder {
           }
         }
 
-        smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
+        this.smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
         return mapping;
       }
     }
 
-    smartLog.debug(`No mapping for: ${relativePath}`);
+    this.smartLog.debug(`No mapping for: ${relativePath}`);
     return null;
   }
 
@@ -3831,12 +3641,12 @@ export class Builder {
     sourceFile: string,
     options: { ensureParent?: boolean } = {},
   ): Promise<string> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return "";
     }
 
-    const webappsRoot = await getTomcat().getWebappsRoot();
+    const webappsRoot = await this.getTomcat().getWebappsRoot();
     if (!webappsRoot) {
       return "";
     }
@@ -3871,12 +3681,10 @@ export class Builder {
 
     if (options.ensureParent !== false) {
       const targetDir = path.dirname(fullDestinationPath);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
+      await fsp.mkdir(targetDir, { recursive: true });
     }
 
-    smartLog.debug(`Path mapping: ${relativePath} → ${destinationPath}`);
+    this.smartLog.debug(`Path mapping: ${relativePath} → ${destinationPath}`);
     return fullDestinationPath;
   }
 
@@ -3888,7 +3696,7 @@ export class Builder {
     relativePath: string,
     sourceFile: string,
   ): string {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return path.basename(sourceFile);
     }
@@ -3897,10 +3705,10 @@ export class Builder {
     const sourcePattern = this.normalizePath(mapping.source);
     const normalizedRelativePath = this.normalizePath(relativePath);
 
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] Extracting relative portion for pattern: ${sourcePattern}`,
     );
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] File relative path: ${normalizedRelativePath}`,
     );
 
@@ -3914,7 +3722,7 @@ export class Builder {
         const afterBasePath = normalizedRelativePath
           .substring(basePath.length)
           .replace(/^\/+/, "");
-        smartLog.debug(
+        this.smartLog.debug(
           `[${process.platform}] Extracted relative portion: ${afterBasePath}`,
         );
         return afterBasePath;
@@ -3928,7 +3736,7 @@ export class Builder {
           const afterBasePath = normalizedRelativePath
             .substring(basePath.length)
             .replace(/^\/+/, "");
-          smartLog.debug(
+          this.smartLog.debug(
             `[${process.platform}] Extracted relative portion (recursive): ${afterBasePath}`,
           );
           return afterBasePath;
@@ -3944,7 +3752,7 @@ export class Builder {
         const afterBasePath = normalizedRelativePath
           .substring(basePath.length)
           .replace(/^\/+/, "");
-        smartLog.debug(
+        this.smartLog.debug(
           `[${process.platform}] Extracted relative portion (wildcard): ${afterBasePath}`,
         );
         return afterBasePath;
@@ -3957,7 +3765,7 @@ export class Builder {
     }
 
     // Default fallback
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] Using basename fallback: ${path.basename(sourceFile)}`,
     );
     return path.basename(sourceFile);
@@ -3992,7 +3800,7 @@ export class Builder {
     sourceFile: string,
     relativePath: string,
   ): string {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot || !this.projectStructure) {
       return path.basename(sourceFile);
     }
@@ -4015,10 +3823,10 @@ export class Builder {
     const normalizedOutputPattern = this.normalizePath(outputPattern);
     const normalizedRelativePath = this.normalizePath(relativePath);
 
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] Class path extraction - Output pattern: ${normalizedOutputPattern}`,
     );
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] Class path extraction - Relative path: ${normalizedRelativePath}`,
     );
 
@@ -4027,14 +3835,14 @@ export class Builder {
       const packagePath = normalizedRelativePath
         .substring(normalizedOutputPattern.length)
         .replace(/^\/+/, "");
-      smartLog.debug(
+      this.smartLog.debug(
         `[${process.platform}] Extracted class package path: ${packagePath}`,
       );
       return packagePath;
     }
 
     // Fallback to basename
-    smartLog.debug(
+    this.smartLog.debug(
       `[${process.platform}] Class path extraction fallback to basename: ${path.basename(sourceFile)}`,
     );
     return path.basename(sourceFile);
@@ -4044,104 +3852,104 @@ export class Builder {
    * Debug method: Print current smart deployment status and configuration
    */
   public async debugSmartDeploymentStatus(): Promise<void> {
-    smartLog.info("🔍 === Smart Deployment Debug Status ===");
+    this.smartLog.info("🔍 === Smart Deployment Debug Status ===");
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      smartLog.warn("❌ No workspace root found");
+      this.smartLog.warn("❌ No workspace root found");
       return;
     }
 
-    smartLog.info(`📁 Workspace Root: ${workspaceRoot}`);
-    smartLog.info(`🎯 Auto Deploy Mode: ${this.autoDeployMode}`);
-    smartLog.info(`🔧 Is Deploying: ${this.isDeploying}`);
-    smartLog.info(`📊 File Watchers Active: ${this.fileWatchers.length}`);
+    this.smartLog.info(`📁 Workspace Root: ${workspaceRoot}`);
+    this.smartLog.info(`🎯 Auto Deploy Mode: ${this.autoDeployMode}`);
+    this.smartLog.info(`🔧 Is Deploying: ${this.isDeploying}`);
+    this.smartLog.info(`📊 File Watchers Active: ${this.fileWatchers.length}`);
 
     // Project Structure
     if (this.projectStructure) {
-      smartLog.info(`🏗️ Project Structure:`);
-      smartLog.info(`   - Type: ${this.projectStructure.type}`);
-      smartLog.info(`   - WebappName: ${this.projectStructure.webappName}`);
+      this.smartLog.info(`🏗️ Project Structure:`);
+      this.smartLog.info(`   - Type: ${this.projectStructure.type}`);
+      this.smartLog.info(`   - WebappName: ${this.projectStructure.webappName}`);
     } else {
-      smartLog.warn("⚠️ Project structure not detected");
+      this.smartLog.warn("⚠️ Project structure not detected");
     }
 
     // Smart Deploy Configuration
     if (this.smartDeployConfig) {
-      smartLog.info(`⚙️ Smart Deploy Config:`);
-      smartLog.info(`   - Project Type: ${this.smartDeployConfig.projectType}`);
-      smartLog.info(`   - Webapp Name: ${this.smartDeployConfig.webappName}`);
-      smartLog.info(
+      this.smartLog.info(`⚙️ Smart Deploy Config:`);
+      this.smartLog.info(`   - Project Type: ${this.smartDeployConfig.projectType}`);
+      this.smartLog.info(`   - Webapp Name: ${this.smartDeployConfig.webappName}`);
+      this.smartLog.info(
         `   - Mappings: ${this.smartDeployConfig.mappings.length} rules`,
       );
-      smartLog.info(
+      this.smartLog.info(
         `   - Debounce Time: ${this.smartDeployConfig.settings.debounceTime}ms`,
       );
-      smartLog.info(`   - Enabled: ${this.smartDeployConfig.settings.enabled}`);
+      this.smartLog.info(`   - Enabled: ${this.smartDeployConfig.settings.enabled}`);
 
       // List all mappings
       this.smartDeployConfig.mappings.forEach((mapping, index) => {
-        smartLog.info(
+        this.smartLog.info(
           `     Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`,
         );
       });
     } else {
-      smartLog.warn("⚠️ Smart deploy configuration not loaded");
+      this.smartLog.warn("⚠️ Smart deploy configuration not loaded");
     }
 
     // File Watcher Details
-    smartLog.info(`👀 Active File Watchers:`);
+    this.smartLog.info(`👀 Active File Watchers:`);
     this.fileWatchers.forEach((_, index) => {
-      smartLog.info(`   Watcher ${index + 1}: Active`);
+      this.smartLog.info(`   Watcher ${index + 1}: Active`);
     });
 
     // Batch Processing Status
-    smartLog.info(`📦 Batch Processing Status:`);
-    smartLog.info(
+    this.smartLog.info(`📦 Batch Processing Status:`);
+    this.smartLog.info(
       `   - Pending Compiled Files: ${this.pendingCompiledFiles.size}`,
     );
-    smartLog.info(
+    this.smartLog.info(
       `   - Batch Timer Active: ${this.batchDeploymentTimer ? "Yes" : "No"}`,
     );
 
     if (this.pendingCompiledFiles.size > 0) {
-      smartLog.info(`   - Pending Files:`);
+      this.smartLog.info(`   - Pending Files:`);
       Array.from(this.pendingCompiledFiles).forEach((file, index) => {
         const fileInfo = JSON.parse(file);
-        smartLog.info(
+        this.smartLog.info(
           `     ${index + 1}. ${path.basename(fileInfo.filePath)} (${fileInfo.eventType})`,
         );
       });
     }
 
     // Maven Configuration Check
-    const mavenParser = new MavenConfigParser(workspaceRoot);
+    const mavenParser = new MavenConfigParser(workspaceRoot, this.getLogger());
     if (mavenParser.isProjectSupported()) {
-      smartLog.info(`🎯 Maven Project Detected - running Maven debug...`);
+      this.smartLog.info(`🎯 Maven Project Detected - running Maven debug...`);
       await mavenParser.debugMavenConfiguration();
     } else {
-      smartLog.info(`📄 Maven pom.xml not found in workspace root`);
+      this.smartLog.info(`📄 Maven pom.xml not found in workspace root`);
     }
 
-    smartLog.info("🔍 === End Smart Deployment Debug Status ===");
+    this.smartLog.info("🔍 === End Smart Deployment Debug Status ===");
   }
 
   /**
    * Debug method: Test compiled file watcher manually
    */
   public async testCompiledFileWatcher(): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      smartLog.warn("❌ No workspace root found");
+      this.smartLog.warn("❌ No workspace root found");
       return;
     }
 
     if (!this.projectStructure) {
-      smartLog.warn("⚠️ Project structure not detected, detecting now...");
+      this.smartLog.warn("⚠️ Project structure not detected, detecting now...");
       this.projectStructure = this.detectProjectStructure();
     }
 
-    smartLog.info("🧪 === Testing Compiled File Watcher ===");
+    this.smartLog.info("🧪 === Testing Compiled File Watcher ===");
 
     // Check output directories based on project type
     let outputDirs: string[] = [];
@@ -4162,7 +3970,7 @@ export class Builder {
     for (const outputDir of outputDirs) {
       const fullOutputPath = path.join(workspaceRoot, outputDir);
       const exists = fs.existsSync(fullOutputPath);
-      smartLog.info(
+      this.smartLog.info(
         `📁 Output Directory: ${outputDir} - ${exists ? "✅ EXISTS" : "❌ NOT FOUND"}`,
       );
 
@@ -4170,25 +3978,25 @@ export class Builder {
         // Look for .class files
         try {
           const classFiles = await glob(`${fullOutputPath}/**/*.class`);
-          smartLog.info(`   - Found ${classFiles.length} .class files`);
+          this.smartLog.info(`   - Found ${classFiles.length} .class files`);
 
           if (classFiles.length > 0) {
             classFiles.slice(0, 5).forEach((file) => {
               const relativePath = path.relative(workspaceRoot, file);
-              smartLog.info(`     - ${relativePath}`);
+              this.smartLog.info(`     - ${relativePath}`);
             });
             if (classFiles.length > 5) {
-              smartLog.info(
+              this.smartLog.info(
                 `     - ... and ${classFiles.length - 5} more files`,
               );
             }
           }
         } catch (error) {
-          smartLog.warn(`   - Error scanning for .class files: ${error}`);
+          this.smartLog.warn(`   - Error scanning for .class files: ${error}`);
         }
       }
     }
 
-    smartLog.info("🧪 === End Compiled File Watcher Test ===");
+    this.smartLog.info("🧪 === End Compiled File Watcher Test ===");
   }
 }
