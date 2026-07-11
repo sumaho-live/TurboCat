@@ -204,6 +204,49 @@ describe('Builder Tests', () => {
       }
     });
 
+    it('deploys a pure Eclipse WTP project using its configured output and all web roots', async () => {
+      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
+      fs.writeFileSync(
+        path.join(workspaceRoot, '.classpath'),
+        '<classpath><classpathentry path="src" kind="src" output="build/generated-classes"/><classpathentry path="build/eclipse-bin" kind="output"/></classpath>'
+      );
+      const settingsDir = path.join(workspaceRoot, '.settings');
+      fs.mkdirSync(settingsDir);
+      fs.writeFileSync(
+        path.join(settingsDir, 'org.eclipse.wst.common.component'),
+        '<project-modules><wb-module deploy-name="eclipse-app"><wb-resource source-path="/WebContent" deploy-path="/"/><wb-resource source-path="/generated-web" deploy-path="/"/></wb-module></project-modules>'
+      );
+      const classDir = path.join(workspaceRoot, 'build', 'eclipse-bin', 'com', 'example');
+      fs.mkdirSync(classDir, { recursive: true });
+      fs.writeFileSync(path.join(classDir, 'App.class'), 'compiled');
+      const generatedClassDir = path.join(workspaceRoot, 'build', 'generated-classes', 'generated');
+      fs.mkdirSync(generatedClassDir, { recursive: true });
+      fs.writeFileSync(path.join(generatedClassDir, 'Generated.class'), 'compiled');
+      fs.mkdirSync(path.join(workspaceRoot, 'WebContent'));
+      fs.writeFileSync(path.join(workspaceRoot, 'WebContent', 'index.jsp'), 'page');
+      fs.mkdirSync(path.join(workspaceRoot, 'generated-web'));
+      fs.writeFileSync(path.join(workspaceRoot, 'generated-web', 'generated.txt'), 'generated');
+
+      const structure = builder.detectProjectStructure();
+      const targetDir = path.join(workspaceRoot, 'deployed');
+      await (builder as unknown as {
+        preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string, progress?: unknown): Promise<void>;
+      }).preBuiltDeploy(workspaceRoot, targetDir, '/tmp/fake-tomcat');
+
+      assert.strictEqual(structure.type, 'eclipse');
+      assert.strictEqual(structure.javaOutputDir, 'build/eclipse-bin');
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'index.jsp')), true);
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'generated.txt')), true);
+      assert.strictEqual(
+        fs.existsSync(path.join(targetDir, 'WEB-INF', 'classes', 'com', 'example', 'App.class')),
+        true
+      );
+      assert.strictEqual(
+        fs.existsSync(path.join(targetDir, 'WEB-INF', 'classes', 'generated', 'Generated.class')),
+        true
+      );
+    });
+
     it('throws when target/classes is missing', async () => {
       fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
 

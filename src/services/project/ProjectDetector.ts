@@ -4,6 +4,19 @@ import path from "path";
 /** Pure project detection kept independent from VS Code and deployment state. */
 export class ProjectDetector {
   public static isJavaWebProject(rootPath: string): boolean {
+    if (
+      fs.existsSync(path.join(rootPath, ".classpath")) &&
+      fs.existsSync(
+        path.join(
+          rootPath,
+          ".settings",
+          "org.eclipse.wst.common.component",
+        ),
+      )
+    ) {
+      return true;
+    }
+
     const webInfPaths = [
       path.join(rootPath, "src", "main", "webapp", "WEB-INF"),
       path.join(rootPath, "WebContent", "WEB-INF"),

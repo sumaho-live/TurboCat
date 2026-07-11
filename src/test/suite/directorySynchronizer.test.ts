@@ -39,4 +39,16 @@ describe("DirectorySynchronizer", () => {
 
     assert.strictEqual(fs.existsSync(path.join(destination, "classes", "App.class")), true);
   });
+
+  it("merges multiple WTP resource roots before pruning the destination", async () => {
+    const second = path.join(root, "second");
+    fs.mkdirSync(second);
+    fs.writeFileSync(path.join(source, "index.jsp"), "page");
+    fs.writeFileSync(path.join(second, "app.properties"), "value=1");
+
+    await DirectorySynchronizer.syncAll([source, second], destination);
+
+    assert.strictEqual(fs.existsSync(path.join(destination, "index.jsp")), true);
+    assert.strictEqual(fs.existsSync(path.join(destination, "app.properties")), true);
+  });
 });

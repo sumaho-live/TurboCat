@@ -26,6 +26,16 @@ describe("ProjectDetector", () => {
     assert.strictEqual(ProjectDetector.isJavaWebProject(root), true);
   });
 
+  it("detects a pure Eclipse WTP project without a pom", () => {
+    fs.writeFileSync(path.join(root, ".classpath"), "<classpath />");
+    fs.mkdirSync(path.join(root, ".settings"));
+    fs.writeFileSync(
+      path.join(root, ".settings", "org.eclipse.wst.common.component"),
+      "<project-modules />",
+    );
+    assert.strictEqual(ProjectDetector.isJavaWebProject(root), true);
+  });
+
   it("does not classify an unrelated Java project as a web project", () => {
     fs.writeFileSync(path.join(root, "build.gradle"), "plugins { java }");
     assert.strictEqual(ProjectDetector.isJavaWebProject(root), false);

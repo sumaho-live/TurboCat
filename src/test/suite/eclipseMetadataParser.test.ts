@@ -25,12 +25,27 @@ describe("EclipseMetadataParser", () => {
     ]);
   });
 
+  it("parses custom output and source folders regardless of attribute order", () => {
+    fs.writeFileSync(
+      path.join(root, ".classpath"),
+      `<classpath><classpathentry path="src" kind="src" output="build/source-classes"/><classpathentry path="build/eclipse-bin" kind="output"/><classpathentry path="lib/local.jar" kind="lib"/></classpath>`,
+    );
+    const metadata = EclipseMetadataParser.parseClasspath(root);
+    assert.strictEqual(metadata.outputDirectory, "build/eclipse-bin");
+    assert.deepStrictEqual(metadata.outputDirectories, [
+      "build/source-classes",
+      "build/eclipse-bin",
+    ]);
+    assert.deepStrictEqual(metadata.sourceRoots, ["src"]);
+    assert.deepStrictEqual(metadata.libraries, [path.join(root, "lib/local.jar")]);
+  });
+
   it("parses WTP roots, class resources, and dependencies", () => {
     const settings = path.join(root, ".settings");
     fs.mkdirSync(settings);
     fs.writeFileSync(
       path.join(settings, "org.eclipse.wst.common.component"),
-      `<project-modules><wb-module deploy-name="sample"><wb-resource deploy-path="/" source-path="/WebContent"/><wb-resource deploy-path="/WEB-INF/classes" source-path="/src"/><dependent-module archive-name="lib.jar" handle="lib/lib.jar"/></wb-module></project-modules>`,
+      `<project-modules><wb-module deploy-name="sample"><wb-resource source-path="/WebContent" deploy-path="/"/><wb-resource source-path="/src" deploy-path="/WEB-INF/classes"/><dependent-module handle="lib/lib.jar" archive-name="lib.jar"/></wb-module></project-modules>`,
     );
     const result = EclipseMetadataParser.parseWtpComponent(root);
     assert.strictEqual(result?.webappName, "sample");
@@ -41,6 +56,10 @@ describe("EclipseMetadataParser", () => {
 
   it("returns safe empty values when metadata is absent", () => {
     assert.deepStrictEqual(EclipseMetadataParser.parseClasspathLibraries(root), []);
+    assert.deepStrictEqual(
+      EclipseMetadataParser.parseClasspath(root).outputDirectories,
+      ["bin"],
+    );
     assert.strictEqual(EclipseMetadataParser.parseWtpComponent(root), null);
   });
 });

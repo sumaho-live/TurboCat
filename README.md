@@ -72,7 +72,9 @@ TurboCat autodetects common Java web structures:
 
 - **Maven** (`pom.xml` with WAR packaging) → runs `mvn clean package`.
 - **Gradle** (`build.gradle` / `.kts`) → runs the `war` task once and reuses the output.
-- **Local / Eclipse-style** (`WebContent`, `src/main/webapp`, or `bin`) → syncs files directly and compiles Java sources with `javac`; smart deploy now auto-watches `WebContent` assets and the `bin` output.
+- **Local / Eclipse-style** (`.classpath` plus Eclipse WTP `.settings`) → reads the actual Eclipse output/source directories and WTP deployment roots. PreBuilt deploys existing classes without Maven and merges all WTP web resource roots into the target application.
+
+For pure Eclipse projects, TurboCat reads `kind="output"` and every per-source `output` attribute from `.classpath` instead of assuming `bin/`. PreBuilt merges all existing class output directories, and Smart Deploy watches each one. TurboCat also reads `.settings/org.eclipse.wst.common.component` for the deployment name, web roots, class resources, and additional mappings. XML attribute order does not affect parsing.
 
 When multiple layouts are detected, TurboCat asks for a single confirmation and persists the answer at the workspace level.
 

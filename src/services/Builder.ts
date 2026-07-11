@@ -1054,13 +1054,16 @@ export class Builder {
     // Eclipse/Plain Java detection
     if (fs.existsSync(path.join(workspaceRoot, ".classpath"))) {
       const wtp = this.parseEclipseWtpComponent(workspaceRoot);
+      const classpath = EclipseMetadataParser.parseClasspath(workspaceRoot);
       const defaultWebappName = wtp?.webappName || path.basename(workspaceRoot);
       const webResourceRoots = wtp?.webResourceRoots.length
         ? wtp.webResourceRoots
         : ["WebContent", "web"];
       const javaSourceRoots = wtp?.javaSourceRoots.length
         ? wtp.javaSourceRoots
-        : ["src"];
+        : classpath.sourceRoots.length
+          ? classpath.sourceRoots
+          : ["src"];
 
       // Merge WTP additional mappings into smart deploy config
       if (wtp?.additionalMappings.length) {
@@ -1069,7 +1072,7 @@ export class Builder {
 
       return {
         type: "eclipse",
-        javaOutputDir: "bin",
+        javaOutputDir: classpath.outputDirectory,
         javaSourceRoots,
         webResourceRoots,
         defaultWebappName,
@@ -1376,8 +1379,13 @@ export class Builder {
 
     // Eclipse project: PreBuilt available when .classpath + bin/ exist
     if (fs.existsSync(path.join(projectDir, ".classpath"))) {
-      const hasEclipseBin = fs.existsSync(path.join(projectDir, "bin"));
-      if (hasEclipseBin && !candidates.includes("PreBuilt")) {
+      const eclipseOutputs = EclipseMetadataParser.parseClasspath(
+        projectDir,
+      ).outputDirectories;
+      const hasEclipseOutput = eclipseOutputs.some((output) =>
+        fs.existsSync(path.join(projectDir, output)),
+      );
+      if (hasEclipseOutput && !candidates.includes("PreBuilt")) {
         candidates.push("PreBuilt");
       }
     }
@@ -1647,6 +1655,12 @@ export class Builder {
 
     if (!outputCandidates.size && this.projectStructure.javaOutputDir) {
       outputCandidates.add(this.projectStructure.javaOutputDir);
+    }
+
+    if (fs.existsSync(path.join(workspaceRoot, ".classpath"))) {
+      EclipseMetadataParser.parseClasspath(workspaceRoot).outputDirectories.forEach(
+        (output) => outputCandidates.add(output),
+      );
     }
 
     if (!outputCandidates.size) {
@@ -2825,9 +2839,13 @@ export class Builder {
     }
 
     // Determine the compiled output directory
-    const classesDir = isMaven
-      ? path.join(projectDir, "target", "classes")
-      : path.join(projectDir, structure.javaOutputDir || "bin");
+    const classDirectories = isMaven
+      ? [path.join(projectDir, "target", "classes")]
+      : EclipseMetadataParser.parseClasspath(projectDir).outputDirectories
+          .map((output) => path.join(projectDir, output))
+          .filter((output) => fs.existsSync(output));
+    const classesDir = classDirectories[0] ??
+      path.join(projectDir, structure.javaOutputDir || "bin");
 
     report("Validating pre-built output...", 5);
     if (!fs.existsSync(classesDir)) {
@@ -2844,9 +2862,20 @@ export class Builder {
         ? [path.join("src", "main", "webapp")]
         : ["WebContent", "web"]),
     ];
-    const webAppPath = this.findFirstExistingPath(projectDir, webAppCandidates);
-    if (webAppPath) {
-      await DirectorySynchronizer.sync(webAppPath, targetDir, {
+    const webAppPaths = [
+      ...new Set(
+        webAppCandidates
+          .filter(Boolean)
+          .map((candidate) =>
+            path.isAbsolute(candidate)
+              ? candidate
+              : path.join(projectDir, candidate.replace(/^[/\\]+/, "")),
+          )
+          .filter((candidate) => fs.existsSync(candidate)),
+      ),
+    ];
+    if (webAppPaths.length > 0) {
+      await DirectorySynchronizer.syncAll(webAppPaths, targetDir, {
         preserveRuntimeFolders: true,
         onCleanupError: (message) => this.smartLog.debug(message),
       });
@@ -2859,7 +2888,11 @@ export class Builder {
 
     report("Copying compiled classes...", 30);
     const targetClassesDir = path.join(targetDir, "WEB-INF", "classes");
-    await DirectorySynchronizer.sync(classesDir, targetClassesDir);
+    if (classDirectories.length > 1) {
+      await DirectorySynchronizer.syncAll(classDirectories, targetClassesDir);
+    } else {
+      await DirectorySynchronizer.sync(classesDir, targetClassesDir);
+    }
 
     const classCount = await this.countFilesRecursive(targetClassesDir);
     if (classCount === 0) {

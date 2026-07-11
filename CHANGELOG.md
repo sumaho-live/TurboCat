@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [1.6.1] - 2026-07-11
+
+### Fixed
+- **Pure Eclipse PreBuilt**: projects without a POM can now be identified from `.classpath` plus Eclipse WTP `.settings` and deployed with PreBuilt.
+- **Eclipse output detection**: TurboCat reads all `kind="output"` and source-specific `output` paths from `.classpath`; PreBuilt merges them and Smart Deploy watches each output instead of assuming `bin/`.
+- **WTP directory parsing**: `wb-resource`, module, dependency, and classpath attributes are parsed independently of XML attribute order and support single or double quotes.
+- **Multiple WTP web roots**: PreBuilt merges all existing root-level WTP resources before clean synchronization, preventing one resource root from deleting another.
+
 ## [1.6.0] - 2026-07-11
 
 ### Added

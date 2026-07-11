@@ -1,8 +1,10 @@
 import fsp from "fs/promises";
+import os from "os";
 import path from "path";
 
 export interface DirectorySyncOptions {
   preserveRuntimeFolders?: boolean;
+  pruneDestination?: boolean;
   onCleanupError?: (message: string) => void;
 }
 
@@ -17,7 +19,8 @@ export class DirectorySynchronizer {
     const keepers = new Set(sourceEntries.map((entry) => entry.name));
     const preserved = new Set(["classes", "lib"]);
 
-    try {
+    if (options.pruneDestination !== false) {
+      try {
       const destinationEntries = await fsp.readdir(destination, {
         withFileTypes: true,
       });
@@ -34,9 +37,10 @@ export class DirectorySynchronizer {
           }
         }
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
     }
 
@@ -49,6 +53,23 @@ export class DirectorySynchronizer {
       } else if (entry.isFile()) {
         await fsp.copyFile(sourcePath, destinationPath);
       }
+    }
+  }
+
+  /** Merge multiple Eclipse/WTP resource roots, then clean-sync them once. */
+  public static async syncAll(
+    sources: string[],
+    destination: string,
+    options: DirectorySyncOptions = {},
+  ): Promise<void> {
+    const staging = await fsp.mkdtemp(path.join(os.tmpdir(), "turbocat-sync-"));
+    try {
+      for (const source of sources) {
+        await this.sync(source, staging, { pruneDestination: false });
+      }
+      await this.sync(staging, destination, options);
+    } finally {
+      await fsp.rm(staging, { recursive: true, force: true });
     }
   }
 }
