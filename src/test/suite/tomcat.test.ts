@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
+import * as vscode from 'vscode';
 import { Tomcat } from '../../services/Tomcat';
 import { Logger } from '../../services/Logger';
 
@@ -58,6 +59,59 @@ describe('Tomcat Tests', () => {
     await tomcat.deactivate();
 
     assert.strictEqual(stop.called, false);
+  });
+
+  it('reports only the Tomcat process owned by the current project', async () => {
+    const folder = {
+      uri: vscode.Uri.file(tempRoot),
+      name: path.basename(tempRoot),
+      index: 0,
+    };
+    sandbox.stub(vscode.workspace, 'workspaceFolders').value([folder]);
+    const projectTomcat = Tomcat.getInstance(folder.uri);
+    const internal = projectTomcat as unknown as {
+      tomcatHome: string;
+      processOwnership: {
+        record(data: {
+          pid: number;
+          workspaceUri: string;
+          catalinaHome: string;
+          catalinaBase: string;
+          httpPort: number;
+          shutdownPort: number;
+          mode: 'run' | 'debug';
+        }): Promise<unknown>;
+      };
+      isPortListening(port: number): Promise<boolean>;
+    };
+    internal.tomcatHome = path.join(tempRoot, 'tomcat-home');
+    sandbox.stub(projectTomcat, 'getCatalinaBase').resolves(tempRoot);
+    const portCheck = sandbox.stub(internal, 'isPortListening').resolves(true);
+
+    await internal.processOwnership.record({
+      pid: process.pid,
+      workspaceUri: 'file:///another-project',
+      catalinaHome: internal.tomcatHome,
+      catalinaBase: tempRoot,
+      httpPort: 8080,
+      shutdownPort: 8005,
+      mode: 'run',
+    });
+
+    assert.strictEqual(await projectTomcat.isRunning(), false);
+    assert.strictEqual(portCheck.called, false);
+
+    await internal.processOwnership.record({
+      pid: process.pid,
+      workspaceUri: folder.uri.toString(),
+      catalinaHome: internal.tomcatHome,
+      catalinaBase: tempRoot,
+      httpPort: 8080,
+      shutdownPort: 8005,
+      mode: 'run',
+    });
+
+    assert.strictEqual(await projectTomcat.isRunning(), true);
   });
 
   it('updates shutdown and HTTP ports in server.xml without touching AJP', async () => {

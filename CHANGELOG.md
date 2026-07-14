@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-07-14
+
+### Fixed
+- **Project-scoped Tomcat status**: the status bar now verifies the current workspace's persisted `CATALINA_BASE`, workspace URI, and live PID instead of treating another VS Code window's listener on the same port as this project's Tomcat.
+
 ## [1.6.1] - 2026-07-11
 
 ### Fixed

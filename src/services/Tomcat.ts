@@ -664,12 +664,39 @@ export class Tomcat {
   }
 
   /**
-   * Public method to check if Tomcat is running
+   * Check whether the Tomcat process owned by this project is running.
+   *
+   * Listening ports are deliberately not used here. Another VS Code window
+   * can run a different project's Tomcat on the same configured ports, and a
+   * port-only check would make this project's toolbar report that server.
    *
    * @returns Boolean indicating server running state
    */
   public async isRunning(): Promise<boolean> {
-    return this.isTomcatRunning();
+    if (this.tomcatProcess && !this.tomcatProcess.killed) {
+      return true;
+    }
+
+    if (!this.tomcatHome) {
+      return false;
+    }
+
+    const catalinaBase =
+      this.activeCatalinaBase ?? (await this.getCatalinaBase(this.tomcatHome));
+    if (!catalinaBase) {
+      return false;
+    }
+
+    const ownership = await this.processOwnership.read(catalinaBase);
+    return Boolean(
+      ownership &&
+        this.processOwnership.isCurrentWorkspaceOwner(
+          ownership,
+          catalinaBase,
+          this.getWorkspaceUri(),
+        ) &&
+        this.processOwnership.isProcessAlive(ownership.pid),
+    );
   }
 
   /**
