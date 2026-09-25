@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-25
+
 ### Fixed
 - **Duplicate smart deploys**: nested watch roots (`src` + `src/main/webapp`) are collapsed so one save fires one watcher; create/change bursts are debounced per file, class batches are keyed by path and serialized, and unchanged sources/identical targets are skipped.
 - **"File in use" on static deploy**: copies wait for a short settle window, never run concurrently for the same file, and retry on `EBUSY`/`EPERM`/`EACCES`.
