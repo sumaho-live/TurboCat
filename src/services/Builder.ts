@@ -22,9 +22,13 @@ import { globToRegex } from "./project/GlobPattern";
 import { EclipseMetadataParser } from "./project/EclipseMetadataParser";
 import { CommandRunner } from "./build/CommandRunner";
 import { DirectorySynchronizer } from "./deployment/DirectorySynchronizer";
-// import { promisify } from 'util';
+import { JavaReadiness } from "./JavaReadiness";
+import {
+  KeyedDebouncer,
+  collapseWatchRoots,
+  copyFileWithRetry,
+} from "./deployment/SmartDeployCoordinator";
 
-// const execAsync = promisify(exec);
 
 /**
  * Interface for build tool configuration parsers
@@ -613,7 +617,24 @@ export class Builder {
 
   // Batch processing for compiled files
   private batchDeploymentTimer?: NodeJS.Timeout; // Global batch timer
-  private pendingCompiledFiles = new Set<string>(); // Files waiting for batch deployment
+  private pendingCompiledFiles = new Map<string, "change" | "create" | "delete">(); // Latest event per file waiting for batch deployment
+  private batchInFlight?: Promise<void>; // Serializes batch runs so the same class is never copied concurrently
+  // Per-file debounce + serialization for static resources and Java source scans
+  private readonly staticDebouncer = new KeyedDebouncer();
+  private readonly javaScanDebouncer = new KeyedDebouncer();
+  // Debounces/serializes Tomcat restarts requested by mappings with needsReload
+  private readonly reloadDebouncer = new KeyedDebouncer();
+  private readonly pendingReloadReasons = new Set<string>();
+  // Source fingerprint (mtime:size) of the last smart-deployed copy, keyed by target path
+  private readonly deployedFingerprints = new Map<string, string>();
+  private static readonly STATIC_SETTLE_MS = 120;
+  private static readonly RECENT_CLASS_WINDOW_MS = 10000;
+  private static readonly RELOAD_SETTLE_MS = 1500;
+  private static readonly BUILD_QUIET_MS = 3000;
+  private static readonly BUILD_QUIET_MAX_WAIT_MS = 120000;
+  // Bumped on every init/dispose so a stale init waiting for Java gives up
+  private smartDeployGeneration = 0;
+  private static readonly CONTENT_COMPARE_LIMIT = 4 * 1024 * 1024;
 
   private projectStructure?: ProjectStructure;
   private smartDeployConfig?: SmartDeployConfig;
@@ -1171,9 +1192,11 @@ export class Builder {
     // The try/finally below ensures smart deploy is ALWAYS restored regardless
     // of early returns, errors, or retries.
     const previousSmartDeploy = this.autoDeployMode;
+    // A full deployment rewrites the webapp, so forget what smart deploy copied.
+    this.deployedFingerprints.clear();
     if (this.autoDeployMode === "Smart") {
       this.autoDeployMode = "Disable";
-      this.disposeFileWatchers();
+      this.disposeSmartDeploy();
       this.smartLog.warn("Smart deploy PAUSED for manual deployment");
     }
 
@@ -1280,6 +1303,7 @@ export class Builder {
         // outer finally will correctly restore the original Smart state.
         await this.deploy(buildType);
       } else {
+        this.attempts = 0;
         this.getLogger().error(`${buildType} build failed:`, true, errorMessage);
       }
     } finally {
@@ -1456,6 +1480,7 @@ export class Builder {
    * 2. Compiled File Watcher: monitors target/build folders for delayed batch deployment
    */
   public async initializeSmartDeploy(): Promise<void> {
+    const generation = ++this.smartDeployGeneration;
     // Update autoDeployMode from config to ensure it's current
     this.autoDeployMode = this.getConfiguration().get(
       "smartDeploy",
@@ -1497,6 +1522,10 @@ export class Builder {
       // Compile mappings for runtime efficiency
       this.compiledMappings = this.compileMappings(this.smartDeployConfig);
 
+      if (!(await this.waitForJavaReady(generation))) {
+        return;
+      }
+
       // Setup dual-watcher architecture
       this.setupDualFileWatchers();
 
@@ -1518,6 +1547,72 @@ export class Builder {
       }
     } catch (error) {
       this.smartLog.error("Failed to initialize smart deploy", error as string);
+    }
+  }
+
+  /**
+   * Hold smart deploy until the Java language server has started and its
+   * initial workspace build has gone quiet; otherwise every class it writes at
+   * start-up would be copied into Tomcat. Returns false when smart deploy must
+   * stay off (Java not ready, or this init was superseded/disabled meanwhile).
+   */
+  private async waitForJavaReady(generation: number): Promise<boolean> {
+    const stale = () =>
+      generation !== this.smartDeployGeneration ||
+      this.autoDeployMode !== "Smart";
+
+    if (JavaReadiness.isReady()) {
+      return true;
+    }
+
+    this.smartLog.info(
+      "Smart deploy waiting for the Java language server to finish loading...",
+    );
+    const ready = await JavaReadiness.whenReady();
+    if (stale()) {
+      return false;
+    }
+    if (!ready) {
+      this.smartLog.warn(
+        "Java language server is not ready; smart deploy stays OFF. Toggle smart deploy again once Java has loaded.",
+      );
+      return false;
+    }
+
+    this.smartLog.info("Java ready; waiting for the initial build to finish...");
+    await this.waitForBuildQuiet(stale);
+    return !stale();
+  }
+
+  /** Resolve once no class file has changed for BUILD_QUIET_MS (capped). */
+  private async waitForBuildQuiet(stale: () => boolean): Promise<void> {
+    let lastActivity = Date.now();
+    const touch = () => {
+      lastActivity = Date.now();
+    };
+    const watchers = this.resolveCompiledOutputDirectories()
+      .filter((dir) => fs.existsSync(dir))
+      .map((dir) => {
+        const watcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(dir, "**/*.class"),
+        );
+        watcher.onDidChange(touch);
+        watcher.onDidCreate(touch);
+        watcher.onDidDelete(touch);
+        return watcher;
+      });
+
+    const deadline = Date.now() + Builder.BUILD_QUIET_MAX_WAIT_MS;
+    try {
+      while (
+        !stale() &&
+        Date.now() - lastActivity < Builder.BUILD_QUIET_MS &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } finally {
+      watchers.forEach((watcher) => watcher.dispose());
     }
   }
 
@@ -1588,20 +1683,21 @@ export class Builder {
 
     let watcherCreated = false;
 
-    candidateRoots.forEach((root) => {
-      if (!root || root.includes("*")) {
-        return;
-      }
-
-      const normalized = root.replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
-      const absolute = path.join(workspaceRoot, normalized);
-
-      if (!fs.existsSync(absolute)) {
+    // Only watch the outermost existing roots: overlapping watchers (e.g. `src`
+    // and `src/main/webapp`) would fire once per watcher for a single save.
+    const existingRoots = [...candidateRoots].filter((root) => {
+      const exists =
+        !!root && fs.existsSync(path.join(workspaceRoot, root));
+      if (!exists && root && !root.includes("*")) {
         this.smartLog.debug(
-          `Skipping static watcher for ${normalized} (directory not found)`,
+          `Skipping static watcher for ${root} (directory not found)`,
         );
-        return;
       }
+      return exists;
+    });
+
+    collapseWatchRoots(existingRoots).forEach((normalized) => {
+      const absolute = path.join(workspaceRoot, normalized);
 
       const globPattern = `${normalized.replace(/\\/g, "/")}/**/*`;
       const pattern = new vscode.RelativePattern(workspaceRoot, globPattern);
@@ -1669,12 +1765,7 @@ export class Builder {
 
     let watcherCreated = false;
 
-    outputCandidates.forEach((root) => {
-      if (!root || root.includes("*")) {
-        return;
-      }
-
-      const normalized = root.replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
+    collapseWatchRoots(outputCandidates).forEach((normalized) => {
       const absolute = path.join(workspaceRoot, normalized);
 
       if (!fs.existsSync(absolute)) {
@@ -1722,11 +1813,6 @@ export class Builder {
     this.fileWatchers = [];
   }
 
-  // LEGACY: Old unified file change handler (commented out)
-  // private handleSourceFileChange(uri: vscode.Uri, eventType: 'change' | 'create' | 'delete'): void {
-  //     ... (old implementation commented out)
-  // }
-
   /**
    * NEW: Handle static resource file changes (immediate deployment)
    * Processes non-Java files from src directory with zero delay
@@ -1754,6 +1840,12 @@ export class Builder {
       return;
     }
 
+    // Class files are owned by the compiled watcher (output dirs may sit
+    // inside a web root, e.g. WebContent/WEB-INF/classes)
+    if (fileExt === ".class") {
+      return;
+    }
+
     // Handle Java files - trigger compilation check
     if (fileExt === ".java") {
       this.smartLog.debug(
@@ -1774,8 +1866,11 @@ export class Builder {
       `Static resource ${eventType}: ${fileName} (${relativePath})`,
     );
 
-    // Immediate deployment for static resources (no debouncing)
-    this.deployStaticResourceImmediately(uri.fsPath, eventType);
+    // Short per-file settle window: collapses the change/create bursts an
+    // editor save produces and lets the writer release the file before we copy.
+    this.staticDebouncer.schedule(uri.fsPath, Builder.STATIC_SETTLE_MS, () =>
+      this.deployStaticResourceImmediately(uri.fsPath, eventType),
+    );
   }
 
   /**
@@ -1799,7 +1894,9 @@ export class Builder {
       "smartDeployDebounce",
       300,
     );
-    setTimeout(
+    this.javaScanDebouncer.schedule(
+      javaFilePath,
+      Math.max(debounceMs, 500),
       async () => {
         try {
           await this.checkAndDeployCompiledClass(javaFilePath, fileName);
@@ -1809,7 +1906,6 @@ export class Builder {
           );
         }
       },
-      Math.max(debounceMs, 500),
     );
   }
 
@@ -1861,28 +1957,15 @@ export class Builder {
         );
       }
 
-      // Strategy 2: Find recently modified class files in the same package
-      const recentMatches: string[] = [];
-      for (const outputDir of existingOutputDirs) {
-        recentMatches.push(
-          ...(await this.findRecentlyModifiedClasses(outputDir, className)),
-        );
-      }
+      // Strategy 2: classes recompiled alongside it (same package directory
+      // only; skipped when the package is unknown and matches may be ambiguous)
+      const recentMatches = javaPackage
+        ? await this.findRecentSiblingClasses(
+            new Set(directMatches.map((file) => path.dirname(file))),
+          )
+        : [];
 
-      // Strategy 3: Find all class files that might be affected by this Java file change
-      const packageMatches: string[] = [];
-      for (const outputDir of existingOutputDirs) {
-        packageMatches.push(
-          ...(await this.findPackageRelatedClasses(outputDir, className)),
-        );
-      }
-
-      // Combine all matches and remove duplicates
-      const allMatches = new Set([
-        ...directMatches,
-        ...recentMatches,
-        ...packageMatches,
-      ]);
+      const allMatches = new Set([...directMatches, ...recentMatches]);
       const classFiles = Array.from(allMatches);
 
       if (classFiles.length === 0) {
@@ -1894,15 +1977,8 @@ export class Builder {
         `Queued ${classFiles.length} compiled classes for ${className}.java`,
       );
 
-      // Group files by type for better logging
-      const directCount = directMatches.length;
-      const recentCount = recentMatches.filter(
-        (f) => !directMatches.includes(f),
-      ).length;
-      const packageCount = classFiles.length - directCount - recentCount;
-
       this.smartLog.debug(
-        `Direct matches: ${directCount}, Recent changes: ${recentCount}, Package related: ${packageCount}`,
+        `Direct matches: ${directMatches.length}, recently recompiled siblings: ${classFiles.length - directMatches.length}`,
       );
 
       // Add all found class files to batch deployment
@@ -1956,104 +2032,36 @@ export class Builder {
   }
 
   /**
-   * Find recently modified class files that might be related to the Java file change
+   * Class files recompiled within the last few seconds in the given package
+   * directories. Only reads those directories, never the whole output tree.
    */
-  private async findRecentlyModifiedClasses(
-    outputDir: string,
-    className: string,
+  private async findRecentSiblingClasses(
+    directories: Iterable<string>,
   ): Promise<string[]> {
-    const now = Date.now();
-    const fiveSecondsAgo = now - 5000; // Look for files modified in the last 5 seconds
-
-    try {
-      // Get the package directory where this class should be located
-      const allClassFiles = await glob(`${outputDir}/**/*.class`);
-      const recentFiles: string[] = [];
-
-      // Find the main class file to determine the package structure
-      const mainClassFiles = allClassFiles.filter(
-        (file) => path.basename(file) === `${className}.class`,
-      );
-
-      if (mainClassFiles.length > 0) {
-        // Get the directory of the main class file
-        const classDir = path.dirname(mainClassFiles[0]);
-
-        // Check all class files in the same directory for recent modifications
-        const packageClassFiles = await glob(`${classDir}/*.class`);
-
-        for (const classFile of packageClassFiles) {
-          try {
-            const stats = fs.statSync(classFile);
-            if (stats.mtime.getTime() > fiveSecondsAgo) {
-              recentFiles.push(classFile);
-            }
-          } catch (error) {
-            // File might have been deleted, ignore
+    const cutoff = Date.now() - Builder.RECENT_CLASS_WINDOW_MS;
+    const results: string[] = [];
+    for (const directory of directories) {
+      let entries: fs.Dirent[];
+      try {
+        entries = await fsp.readdir(directory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".class")) {
+          continue;
+        }
+        const file = path.join(directory, entry.name);
+        try {
+          if ((await fsp.stat(file)).mtimeMs > cutoff) {
+            results.push(file);
           }
+        } catch {
+          // File removed between readdir and stat
         }
       }
-
-      return recentFiles;
-    } catch (error) {
-      this.smartLog.debug(`Error finding recently modified classes: ${error}`);
-      return [];
     }
-  }
-
-  /**
-   * Find package-related class files that might be affected by interdependencies
-   */
-  private async findPackageRelatedClasses(
-    outputDir: string,
-    className: string,
-  ): Promise<string[]> {
-    try {
-      // This is a more conservative approach - we look for classes that might have dependencies
-      // For now, we'll focus on the immediate package, but this could be expanded
-
-      const allClassFiles = await glob(`${outputDir}/**/*.class`);
-      const relatedFiles: string[] = [];
-
-      // Find classes in the same package that were recently modified
-      const mainClassFiles = allClassFiles.filter(
-        (file) => path.basename(file) === `${className}.class`,
-      );
-
-      if (mainClassFiles.length > 0) {
-        const classDir = path.dirname(mainClassFiles[0]);
-        const packageName = path.relative(outputDir, classDir);
-
-        // For now, include all recently modified files in the same package
-        // This could be made more sophisticated by analyzing actual dependencies
-        const now = Date.now();
-        const tenSecondsAgo = now - 10000; // Slightly longer window for package dependencies
-
-        const packageFiles = await glob(`${classDir}/*.class`);
-        for (const file of packageFiles) {
-          try {
-            const stats = fs.statSync(file);
-            if (stats.mtime.getTime() > tenSecondsAgo) {
-              relatedFiles.push(file);
-            }
-          } catch (error) {
-            // Ignore errors
-          }
-        }
-
-        if (relatedFiles.length > 1) {
-          // More than just the main class
-          this.smartLog.debug(
-            `Found ${relatedFiles.length} potentially related classes in package: ${packageName}`,
-          );
-        }
-      }
-
-      return relatedFiles;
-    } catch (error) {
-      this.smartLog.debug(`Error finding package-related classes: ${error}`);
-      return [];
-    }
+    return results;
   }
 
   /**
@@ -2103,19 +2111,6 @@ export class Builder {
     return this.syncBypassPatterns.some((pattern) => pattern.test(baseName));
   }
 
-  // LEGACY: Old deployment methods (commented out for new dual-watcher architecture)
-  // These methods were used in the previous hybrid approach
-
-  /*
-    private async deployCompiledClassWithMapping(sourceJavaPath: string, relativePath: string): Promise<void> {
-        // ... (implementation commented out)
-    }
-
-    private async deploySourceFileWithMapping(sourceFilePath: string): Promise<void> {
-        // ... (implementation commented out)
-    }
-    */
-
   /**
    * NEW: Immediate deployment for static resources (no debouncing)
    */
@@ -2145,7 +2140,10 @@ export class Builder {
         return;
       }
 
-      await this.copyFileWithLogging(filePath, targetPath, "static");
+      if (!(await this.copyFileWithLogging(filePath, targetPath, "static"))) {
+        return;
+      }
+      this.scheduleReloadIfNeeded(mapping, filePath);
 
       const fileName = path.basename(filePath);
       const webappsRoot = await this.getTomcat().getWebappsRoot();
@@ -2174,8 +2172,8 @@ export class Builder {
       300,
     );
 
-    // Add file to pending batch (using Map to store both path and event type)
-    this.pendingCompiledFiles.add(JSON.stringify({ filePath, eventType }));
+    // Keep only the latest event per file so create+change collapse into one copy
+    this.pendingCompiledFiles.set(filePath, eventType);
 
     this.smartLog.debug(
       `Added to batch: ${path.basename(filePath)} (${eventType}) - ${this.pendingCompiledFiles.size} files queued`,
@@ -2195,6 +2193,20 @@ export class Builder {
    * Execute batch deployment of all pending compiled files
    */
   private async executeBatchDeployment(): Promise<void> {
+    // Serialize batches: wait for a running batch before starting the next one
+    while (this.batchInFlight) {
+      await this.batchInFlight;
+    }
+    const run = this.runBatchDeployment();
+    this.batchInFlight = run;
+    try {
+      await run;
+    } finally {
+      this.batchInFlight = undefined;
+    }
+  }
+
+  private async runBatchDeployment(): Promise<void> {
     if (this.pendingCompiledFiles.size === 0) {
       return;
     }
@@ -2203,8 +2215,8 @@ export class Builder {
     this.smartLog.info(`Executing batch deployment for ${batchSize} compiled files`);
 
     // Convert Set to array and parse file information
-    const filesToDeploy = Array.from(this.pendingCompiledFiles).map((item) =>
-      JSON.parse(item),
+    const filesToDeploy = Array.from(this.pendingCompiledFiles).map(
+      ([filePath, eventType]) => ({ filePath, eventType }),
     );
 
     // Clear pending files
@@ -2238,31 +2250,7 @@ export class Builder {
       this.smartLog.warn(`Batch deployment had ${errorCount} errors`);
     }
 
-    // Optional: Trigger single reload after batch deployment instead of per-file
-    // This is more efficient for multiple class changes
-    // TODO: Implement conditional reload based on mapping configuration
   }
-
-  // LEGACY: Individual file deployment method (commented out in favor of batch processing)
-  // private deployCompiledFileWithDelay(filePath: string, eventType: 'change' | 'create' | 'delete'): void {
-  //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
-  //
-  //     this.getLogger().debug(`Compiled file debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
-  //
-  //     if (this.compiledFileDebouncer.has(filePath)) {
-  //         clearTimeout(this.compiledFileDebouncer.get(filePath)!);
-  //     }
-  //
-  //     this.compiledFileDebouncer.set(filePath, setTimeout(async () => {
-  //         try {
-  //             await this.executeCompiledFileDeployment(filePath, eventType);
-  //         } catch (error) {
-  //             this.getLogger().error(`Compiled deploy failed for ${path.basename(filePath)}`, false, error as string);
-  //         } finally {
-  //             this.compiledFileDebouncer.delete(filePath);
-  //         }
-  //     }, debounceTime));
-  // }
 
   /**
    * Execute compiled file deployment logic
@@ -2294,7 +2282,10 @@ export class Builder {
       return;
     }
 
-    await this.copyFileWithLogging(filePath, targetPath, "class");
+    if (!(await this.copyFileWithLogging(filePath, targetPath, "class"))) {
+      return;
+    }
+    this.scheduleReloadIfNeeded(mapping, filePath);
 
     const fileName = path.basename(filePath);
     const webappsRoot = await this.getTomcat().getWebappsRoot();
@@ -2334,6 +2325,8 @@ export class Builder {
     }
 
     await fsp.rm(targetPath, { force: true });
+    this.deployedFingerprints.delete(targetPath);
+    this.scheduleReloadIfNeeded(mapping, filePath);
     const webappsRoot = await this.getTomcat().getWebappsRoot();
     const relativePath = webappsRoot
       ? path.relative(webappsRoot, targetPath)
@@ -2341,92 +2334,123 @@ export class Builder {
     this.smartLog.info(`Removed deployed ${type}: ${relativePath}`);
   }
 
-  // LEGACY: Old debounced deploy method (commented out)
-  // private debouncedDeploy(filePath: string, deployFn: () => Promise<void>): void {
-  //     const debounceTime = vscode.workspace.getConfiguration('turbocat').get<number>('smartDeployDebounce', 300);
-  //
-  //     // Debug log to verify configuration is being read correctly
-  //     this.getLogger().debug(`Smart Deploy debounce time: ${debounceTime}ms for file: ${path.basename(filePath)}`);
-  //
-  //     if (this.deployDebouncer.has(filePath)) {
-  //         clearTimeout(this.deployDebouncer.get(filePath)!);
-  //     }
-  //
-  //     this.deployDebouncer.set(filePath, setTimeout(async () => {
-  //         try {
-  //             await deployFn();
-  //         } catch (error) {
-  //             this.getLogger().error(`Smart deploy failed for ${path.basename(filePath)}`, false, error as string);
-  //         } finally {
-  //             this.deployDebouncer.delete(filePath);
-  //         }
-  //     }, debounceTime));
-  // }
-
   /**
-   * Copy file with progress indication and logging
+   * Copy file with progress indication and logging.
+   * Returns false when the copy was skipped (source missing or already deployed).
    */
   private async copyFileWithLogging(
     source: string,
     target: string,
     type: "class" | "static" | "local",
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let fingerprint: string;
     try {
-      // Check if source file exists
-      if (!fs.existsSync(source)) {
-        this.smartLog.warn(
-          `Smart deploy: Source file not found: ${path.basename(source)}`,
-        );
-        return;
+      const stats = await fsp.stat(source);
+      fingerprint = `${stats.mtimeMs}:${stats.size}`;
+    } catch {
+      this.smartLog.warn(
+        `Smart deploy: Source file not found: ${path.basename(source)}`,
+      );
+      return false;
+    }
+
+    // Several triggers (watcher events, Java source scan) can target the same
+    // file; skip the copy when this exact source version is already deployed.
+    if (
+      this.deployedFingerprints.get(target) === fingerprint &&
+      fs.existsSync(target)
+    ) {
+      this.smartLog.debug(`Already deployed, skipping: ${path.basename(source)}`);
+      return false;
+    }
+
+    // A full rebuild (e.g. Java language server start-up) rewrites every
+    // class with identical bytes; don't touch targets Tomcat already has.
+    if (await this.hasSameContent(source, target)) {
+      this.deployedFingerprints.set(target, fingerprint);
+      this.smartLog.debug(`Unchanged content, skipping: ${path.basename(source)}`);
+      return false;
+    }
+
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await copyFileWithRetry(source, target);
+    this.deployedFingerprints.set(target, fingerprint);
+
+    const fileName = path.basename(source);
+    const label =
+      type === "class"
+        ? "Smart deployed class"
+        : type === "static"
+          ? "Smart deployed static"
+          : "Local mapping synced";
+    this.smartLog.debug(`${label}: ${fileName}`);
+    return true;
+  }
+
+  private async hasSameContent(source: string, target: string): Promise<boolean> {
+    try {
+      const [sourceStats, targetStats] = await Promise.all([
+        fsp.stat(source),
+        fsp.stat(target),
+      ]);
+      if (
+        sourceStats.size !== targetStats.size ||
+        sourceStats.size > Builder.CONTENT_COMPARE_LIMIT
+      ) {
+        return false;
       }
-
-      // Ensure target directory exists
-      const targetDir = path.dirname(target);
-      await fsp.mkdir(targetDir, { recursive: true });
-
-      // Copy the file
-      await fsp.copyFile(source, target);
-
-      const fileName = path.basename(source);
-      const label =
-        type === "class"
-          ? "Smart deployed class"
-          : type === "static"
-            ? "Smart deployed static"
-            : "Local mapping synced";
-      this.smartLog.debug(`${label}: ${fileName}`);
-    } catch (error) {
-      throw error;
+      const [a, b] = await Promise.all([
+        fsp.readFile(source),
+        fsp.readFile(target),
+      ]);
+      return a.equals(b);
+    } catch {
+      return false;
     }
   }
 
   /**
-   * Check if file is a static web resource
+   * Restart Tomcat once after a burst of smart deploys touching mappings with
+   * needsReload (classes, WEB-INF resources). Skipped while debugging, where
+   * the Java debugger hot-swaps classes and a restart would kill the session.
    */
-  // private isStaticWebResource(filePath: string): boolean {
-  //     const webExtensions = [
-  //         '.html', '.htm', '.css', '.js', '.json', '.xml', '.jsp', '.jspf',
-  //         '.tag', '.tld', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico',
-  //         '.txt', '.properties', '.woff', '.woff2', '.ttf', '.eot', '.md'
-  //     ];
-
-  //     const ext = path.extname(filePath).toLowerCase();
-
-  //     // Exclude files in typical output directories
-  //     if (this.projectStructure) {
-  //         const outputDir = this.projectStructure.javaOutputDir;
-  //         if (filePath.includes(outputDir)) {
-  //             return false;
-  //         }
-  //     }
-
-  //     return webExtensions.includes(ext);
-  // }
+  private scheduleReloadIfNeeded(mapping: CompiledMapping, filePath: string): void {
+    if (
+      !mapping.needsReload ||
+      !this.getConfiguration().get<boolean>("smartDeployReload", true)
+    ) {
+      return;
+    }
+    this.pendingReloadReasons.add(path.basename(filePath));
+    this.reloadDebouncer.schedule("reload", Builder.RELOAD_SETTLE_MS, async () => {
+      const reasons = [...this.pendingReloadReasons];
+      this.pendingReloadReasons.clear();
+      if (!reasons.length || this.autoDeployMode !== "Smart") {
+        return;
+      }
+      const state = await this.getTomcat().getRunState();
+      const summary =
+        reasons.length > 3
+          ? `${reasons.slice(0, 3).join(", ")} +${reasons.length - 3}`
+          : reasons.join(", ");
+      if (state === "stopped") {
+        this.smartLog.debug(`Tomcat not running; reload skipped (${summary})`);
+      } else if (state === "debug") {
+        this.smartLog.info(
+          `Debug mode: relying on debugger hot swap, Tomcat not restarted (${summary})`,
+        );
+      } else {
+        this.smartLog.info(`Restarting Tomcat to apply: ${summary}`);
+        await this.getTomcat().reload();
+      }
+    });
+  }
 
   /**
    * Dispose smart deploy watchers (dual-watcher approach with batch cleanup)
    */
   public disposeSmartDeploy(): void {
+    this.smartDeployGeneration++;
     this.disposeFileWatchers();
 
     // Clear batch deployment timer and pending files
@@ -2435,81 +2459,13 @@ export class Builder {
       this.batchDeploymentTimer = undefined;
     }
     this.pendingCompiledFiles.clear();
+    this.staticDebouncer.dispose();
+    this.javaScanDebouncer.dispose();
+    this.reloadDebouncer.dispose();
+    this.pendingReloadReasons.clear();
+    this.deployedFingerprints.clear();
 
     this.smartLog.debug("Smart deploy cleanup: All watchers and timers disposed");
-  }
-
-  /**
-   * Test method to manually test dual-watcher deployment
-   */
-  public async testDualWatcherDeploy(): Promise<void> {
-    if (!this.projectStructure) {
-      this.smartLog.debug("Test deploy: No project structure found");
-      return;
-    }
-
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      this.smartLog.debug("Test deploy: No workspace root found");
-      return;
-    }
-
-    this.smartLog.info("🧪 Testing dual-watcher deployment system...");
-
-    try {
-      // Test static resource deployment
-      const srcPath = path.join(workspaceRoot, "src");
-      if (fs.existsSync(srcPath)) {
-        const staticFiles = await this.findFiles(
-          path.join(srcPath, "**", "*.{html,css,js,jsp}"),
-        );
-        this.smartLog.debug(`Test deploy: Found ${staticFiles.length} static files`);
-
-        for (const file of staticFiles.slice(0, 1)) {
-          // Test with first file
-          this.smartLog.debug(`Test static deploy: Processing ${file}`);
-          const uri = vscode.Uri.file(file);
-          this.handleStaticResourceChange(uri, "create");
-        }
-      }
-
-      // Test compiled file deployment if target directory exists (simulate batch changes)
-      const targetPath = path.join(
-        workspaceRoot,
-        this.projectStructure.javaOutputDir,
-      );
-      if (fs.existsSync(targetPath)) {
-        const classFiles = await this.findFiles(
-          path.join(targetPath, "**", "*.class"),
-        );
-        this.smartLog.debug(`Test deploy: Found ${classFiles.length} class files`);
-
-        // Simulate multiple class files changing at once (batch scenario)
-        const testFiles = classFiles.slice(0, Math.min(3, classFiles.length));
-        this.smartLog.info(
-          `🧪 Simulating batch change: ${testFiles.length} class files`,
-        );
-
-        testFiles.forEach((file, index) => {
-          this.smartLog.debug(
-            `Test batch compile deploy ${index + 1}: Processing ${file}`,
-          );
-          const uri = vscode.Uri.file(file);
-          // All files will be batched together automatically
-          this.handleCompiledFileChange(uri, "create");
-        });
-
-        if (testFiles.length > 1) {
-          this.smartLog.info(
-            `⏱️ Batch processing will execute in ${this.getConfiguration().get<number>("smartDeployDebounce", 300)}ms...`,
-          );
-        }
-      }
-
-      this.smartLog.info("✅ Dual-watcher deployment test completed");
-    } catch (error) {
-      this.smartLog.error("Dual-watcher test failed", error as string);
-    }
   }
 
   /**
@@ -3879,157 +3835,5 @@ export class Builder {
       `[${process.platform}] Class path extraction fallback to basename: ${path.basename(sourceFile)}`,
     );
     return path.basename(sourceFile);
-  }
-
-  /**
-   * Debug method: Print current smart deployment status and configuration
-   */
-  public async debugSmartDeploymentStatus(): Promise<void> {
-    this.smartLog.info("🔍 === Smart Deployment Debug Status ===");
-
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      this.smartLog.warn("❌ No workspace root found");
-      return;
-    }
-
-    this.smartLog.info(`📁 Workspace Root: ${workspaceRoot}`);
-    this.smartLog.info(`🎯 Auto Deploy Mode: ${this.autoDeployMode}`);
-    this.smartLog.info(`🔧 Is Deploying: ${this.isDeploying}`);
-    this.smartLog.info(`📊 File Watchers Active: ${this.fileWatchers.length}`);
-
-    // Project Structure
-    if (this.projectStructure) {
-      this.smartLog.info(`🏗️ Project Structure:`);
-      this.smartLog.info(`   - Type: ${this.projectStructure.type}`);
-      this.smartLog.info(`   - WebappName: ${this.projectStructure.webappName}`);
-    } else {
-      this.smartLog.warn("⚠️ Project structure not detected");
-    }
-
-    // Smart Deploy Configuration
-    if (this.smartDeployConfig) {
-      this.smartLog.info(`⚙️ Smart Deploy Config:`);
-      this.smartLog.info(`   - Project Type: ${this.smartDeployConfig.projectType}`);
-      this.smartLog.info(`   - Webapp Name: ${this.smartDeployConfig.webappName}`);
-      this.smartLog.info(
-        `   - Mappings: ${this.smartDeployConfig.mappings.length} rules`,
-      );
-      this.smartLog.info(
-        `   - Debounce Time: ${this.smartDeployConfig.settings.debounceTime}ms`,
-      );
-      this.smartLog.info(`   - Enabled: ${this.smartDeployConfig.settings.enabled}`);
-
-      // List all mappings
-      this.smartDeployConfig.mappings.forEach((mapping, index) => {
-        this.smartLog.info(
-          `     Mapping ${index + 1}: ${mapping.source} → ${mapping.destination} (reload: ${mapping.needsReload})`,
-        );
-      });
-    } else {
-      this.smartLog.warn("⚠️ Smart deploy configuration not loaded");
-    }
-
-    // File Watcher Details
-    this.smartLog.info(`👀 Active File Watchers:`);
-    this.fileWatchers.forEach((_, index) => {
-      this.smartLog.info(`   Watcher ${index + 1}: Active`);
-    });
-
-    // Batch Processing Status
-    this.smartLog.info(`📦 Batch Processing Status:`);
-    this.smartLog.info(
-      `   - Pending Compiled Files: ${this.pendingCompiledFiles.size}`,
-    );
-    this.smartLog.info(
-      `   - Batch Timer Active: ${this.batchDeploymentTimer ? "Yes" : "No"}`,
-    );
-
-    if (this.pendingCompiledFiles.size > 0) {
-      this.smartLog.info(`   - Pending Files:`);
-      Array.from(this.pendingCompiledFiles).forEach((file, index) => {
-        const fileInfo = JSON.parse(file);
-        this.smartLog.info(
-          `     ${index + 1}. ${path.basename(fileInfo.filePath)} (${fileInfo.eventType})`,
-        );
-      });
-    }
-
-    // Maven Configuration Check
-    const mavenParser = new MavenConfigParser(workspaceRoot, this.getLogger());
-    if (mavenParser.isProjectSupported()) {
-      this.smartLog.info(`🎯 Maven Project Detected - running Maven debug...`);
-      await mavenParser.debugMavenConfiguration();
-    } else {
-      this.smartLog.info(`📄 Maven pom.xml not found in workspace root`);
-    }
-
-    this.smartLog.info("🔍 === End Smart Deployment Debug Status ===");
-  }
-
-  /**
-   * Debug method: Test compiled file watcher manually
-   */
-  public async testCompiledFileWatcher(): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      this.smartLog.warn("❌ No workspace root found");
-      return;
-    }
-
-    if (!this.projectStructure) {
-      this.smartLog.warn("⚠️ Project structure not detected, detecting now...");
-      this.projectStructure = this.detectProjectStructure();
-    }
-
-    this.smartLog.info("🧪 === Testing Compiled File Watcher ===");
-
-    // Check output directories based on project type
-    let outputDirs: string[] = [];
-    switch (this.projectStructure.type) {
-      case "maven":
-        outputDirs = ["target/classes", "target/test-classes"];
-        break;
-      case "gradle":
-        outputDirs = ["build/classes/java/main", "build/classes/java/test"];
-        break;
-      case "eclipse":
-      case "plain":
-      default:
-        outputDirs = ["bin", "out"];
-        break;
-    }
-
-    for (const outputDir of outputDirs) {
-      const fullOutputPath = path.join(workspaceRoot, outputDir);
-      const exists = fs.existsSync(fullOutputPath);
-      this.smartLog.info(
-        `📁 Output Directory: ${outputDir} - ${exists ? "✅ EXISTS" : "❌ NOT FOUND"}`,
-      );
-
-      if (exists) {
-        // Look for .class files
-        try {
-          const classFiles = await glob(`${fullOutputPath}/**/*.class`);
-          this.smartLog.info(`   - Found ${classFiles.length} .class files`);
-
-          if (classFiles.length > 0) {
-            classFiles.slice(0, 5).forEach((file) => {
-              const relativePath = path.relative(workspaceRoot, file);
-              this.smartLog.info(`     - ${relativePath}`);
-            });
-            if (classFiles.length > 5) {
-              this.smartLog.info(
-                `     - ... and ${classFiles.length - 5} more files`,
-              );
-            }
-          }
-        } catch (error) {
-          this.smartLog.warn(`   - Error scanning for .class files: ${error}`);
-        }
-      }
-    }
-
-    this.smartLog.info("🧪 === End Compiled File Watcher Test ===");
   }
 }

@@ -35,6 +35,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.shutdownPort` | Tomcat shutdown socket | Must differ from the HTTP port; updates server.xml and restarts on demand |
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
+| `turbocat.smartDeployReload` | Restart Tomcat after smart deploy updates classes/resources that need a reload (skipped in debug mode) | Default `true` |
 | `turbocat.syncBypassPatterns` | Filename keywords to skip syncing | Comma-separated list, default catches “copy” variants |
 | `turbocat.showSmartDeployLog` | Toggle smart deploy info/debug logs | Defaults to true; set false to suppress automatic sync chatter |
 | `turbocat.logEncoding` | Tomcat log decoding | Accepts any iconv-lite encoding name, such as `shift_jis` or `gb18030` |

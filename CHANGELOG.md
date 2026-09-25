@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Duplicate smart deploys**: nested watch roots (`src` + `src/main/webapp`) are collapsed so one save fires one watcher; create/change bursts are debounced per file, class batches are keyed by path and serialized, and unchanged sources/identical targets are skipped.
+- **"File in use" on static deploy**: copies wait for a short settle window, never run concurrently for the same file, and retry on `EBUSY`/`EPERM`/`EACCES`.
+- **Smart deploy at VS Code start-up**: smart deploy now waits for the Java language server to be ready and its initial build to go quiet before enabling, instead of copying every rebuilt class into Tomcat.
+- **Java source scan**: related classes are looked up only in the source file's package directory instead of scanning the whole output tree.
+- Manual deploy retry counter now resets after a final failure.
+
+### Added
+- `turbocat.smartDeployReload`: restart Tomcat once after smart deploy updates classes or resources whose mapping has `needsReload` (skipped in debug mode, where the debugger hot-swaps classes).
+
+### Removed
+- Legacy commented-out code and unused debug methods in `Builder.ts`.
+
 ## [1.6.2] - 2026-07-14
 
 ### Fixed

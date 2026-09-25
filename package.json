@@ -222,6 +222,12 @@
           "scope": "resource",
           "description": "Debounce time in milliseconds for smart deploy to prevent rapid successive deployments."
         },
+        "turbocat.smartDeployReload": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Restart Tomcat after smart deploy updates classes or resources whose mapping needs a reload. Skipped in debug mode, where the debugger hot-swaps classes."
+        },
         "turbocat.preferredBuildType": {
           "type": "string",
           "enum": [
@@ -317,8 +323,8 @@
     "lint": "eslint src --ext .ts --max-warnings=0",
     "test": "node ./scripts/run-tests.js",
     "test:e2e": "node ./scripts/run-tests.js",
-    "test:unit": "npm run compile-tests && mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js",
-    "coverage": "npm run compile-tests && nyc --include 'out/services/project/**/*.js' --include 'out/services/build/**/*.js' --include 'out/services/deployment/**/*.js' --exclude 'out/test/**' --exclude-after-remap=false --check-coverage --lines 85 --statements 85 --functions 75 --branches 60 --reporter=text --reporter=lcov mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js"
+    "test:unit": "npm run compile-tests && mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js out/test/suite/smartDeployCoordinator.test.js",
+    "coverage": "npm run compile-tests && nyc --include 'out/services/project/**/*.js' --include 'out/services/build/**/*.js' --include 'out/services/deployment/**/*.js' --exclude 'out/test/**' --exclude-after-remap=false --check-coverage --lines 85 --statements 85 --functions 75 --branches 60 --reporter=text --reporter=lcov mocha out/test/suite/projectDetector.test.js out/test/suite/globPattern.test.js out/test/suite/eclipseMetadataParser.test.js out/test/suite/commandRunner.test.js out/test/suite/directorySynchronizer.test.js out/test/suite/smartDeployCoordinator.test.js"
   },
   "devDependencies": {
     "@istanbuljs/nyc-config-typescript": "^1.0.2",

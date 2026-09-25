@@ -56,7 +56,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             Logger.getInstance().info(`Smart Deploy: ${newMode === 'Smart' ? 'Enabled' : 'Disabled'}`, true);
             
             if (newMode === 'Smart') {
-                await runtime.builder.initializeSmartDeploy();
+                void runtime.builder.initializeSmartDeploy();
             } else {
                 runtime.builder.disposeSmartDeploy();
             }
@@ -229,7 +229,8 @@ async function updateSettings(event: vscode.ConfigurationChangeEvent): Promise<v
         }
         if (event.affectsConfiguration('turbocat.smartDeploy', resource)) {
             if (configuration.get<string>('smartDeploy') === 'Smart') {
-                await runtime.builder.initializeSmartDeploy();
+                // May wait for the Java language server; don't block other settings
+                void runtime.builder.initializeSmartDeploy();
             } else {
                 runtime.builder.disposeSmartDeploy();
             }

@@ -7,6 +7,7 @@ import * as os from 'os';
 import { Builder } from '../../services/Builder';
 import { Tomcat } from '../../services/Tomcat';
 import { Logger } from '../../services/Logger';
+import { JavaReadiness } from '../../services/JavaReadiness';
 
 describe('Builder Tests', () => {
   let builder: Builder;
@@ -439,6 +440,128 @@ describe('Builder Tests', () => {
       // Package should be com/aaa/calendario (forward slashes, normalized)
       assert.strictEqual(receivedPackage, 'com/aaa/calendario',
         `Expected package 'com/aaa/calendario' but got '${receivedPackage}'`);
+    });
+  });
+
+  describe('findRecentSiblingClasses()', () => {
+    it('returns only recently written classes from the given package directories', async () => {
+      const pkg = path.join(workspaceRoot, 'target', 'classes', 'com', 'a');
+      const other = path.join(workspaceRoot, 'target', 'classes', 'com', 'b');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.mkdirSync(other, { recursive: true });
+      fs.writeFileSync(path.join(pkg, 'Fresh.class'), '');
+      fs.writeFileSync(path.join(pkg, 'notes.txt'), '');
+      const stale = path.join(pkg, 'Stale.class');
+      fs.writeFileSync(stale, '');
+      const old = new Date(Date.now() - 60000);
+      fs.utimesSync(stale, old, old);
+      fs.writeFileSync(path.join(other, 'Elsewhere.class'), '');
+
+      const found = await (builder as unknown as {
+        findRecentSiblingClasses(dirs: Iterable<string>): Promise<string[]>;
+      }).findRecentSiblingClasses([pkg]);
+
+      assert.deepStrictEqual(found.map(f => path.basename(f)), ['Fresh.class']);
+    });
+  });
+
+  describe('copyFileWithLogging()', () => {
+    type Copier = { copyFileWithLogging(s: string, t: string, type: 'class' | 'static' | 'local'): Promise<boolean> };
+
+    it('skips targets that already hold identical bytes', async () => {
+      const source = path.join(workspaceRoot, 'A.class');
+      const target = path.join(workspaceRoot, 'out', 'A.class');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(source, 'same');
+      fs.writeFileSync(target, 'same');
+      const past = new Date(Date.now() - 60000);
+      fs.utimesSync(target, past, past);
+
+      const copied = await (builder as unknown as Copier).copyFileWithLogging(source, target, 'class');
+
+      assert.strictEqual(copied, false);
+      assert.strictEqual(fs.statSync(target).mtimeMs, past.getTime());
+    });
+
+    it('copies changed content once and skips the repeated trigger', async () => {
+      const source = path.join(workspaceRoot, 'a.jsp');
+      const target = path.join(workspaceRoot, 'out', 'a.jsp');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(source, 'new');
+      fs.writeFileSync(target, 'old');
+
+      const copier = builder as unknown as Copier;
+      assert.strictEqual(await copier.copyFileWithLogging(source, target, 'static'), true);
+      assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new');
+      assert.strictEqual(await copier.copyFileWithLogging(source, target, 'static'), false);
+    });
+  });
+
+  describe('scheduleReloadIfNeeded()', () => {
+    type Reloader = {
+      autoDeployMode: string;
+      scheduleReloadIfNeeded(mapping: { needsReload: boolean }, file: string): void;
+    };
+
+    const runReload = async (state: 'stopped' | 'run' | 'debug', needsReload = true) => {
+      const tomcat = Tomcat.getInstance();
+      sandbox.stub(tomcat, 'getRunState').resolves(state);
+      const reload = sandbox.stub(tomcat, 'reload').resolves();
+      const clock = sandbox.useFakeTimers();
+      const reloader = builder as unknown as Reloader;
+      reloader.autoDeployMode = 'Smart';
+      reloader.scheduleReloadIfNeeded({ needsReload }, '/x/A.class');
+      reloader.scheduleReloadIfNeeded({ needsReload }, '/x/B.class');
+      await clock.tickAsync(5000);
+      clock.restore();
+      return reload.callCount;
+    };
+
+    it('restarts Tomcat once for a burst of reload-worthy changes', async () => {
+      assert.strictEqual(await runReload('run'), 1);
+    });
+
+    it('does not restart in debug mode, when stopped, or for mappings without needsReload', async () => {
+      assert.strictEqual(await runReload('debug'), 0);
+      sandbox.restore();
+      assert.strictEqual(await runReload('stopped'), 0);
+      sandbox.restore();
+      assert.strictEqual(await runReload('run', false), 0);
+    });
+  });
+
+  describe('waitForJavaReady()', () => {
+    type Gate = {
+      autoDeployMode: string;
+      smartDeployGeneration: number;
+      waitForJavaReady(generation: number): Promise<boolean>;
+    };
+
+    it('passes straight through when Java is already ready', async () => {
+      sandbox.stub(JavaReadiness, 'isReady').returns(true);
+      const gate = builder as unknown as Gate;
+      gate.autoDeployMode = 'Smart';
+      assert.strictEqual(await gate.waitForJavaReady(gate.smartDeployGeneration), true);
+    });
+
+    it('keeps smart deploy off when the Java server fails to become ready', async () => {
+      sandbox.stub(JavaReadiness, 'isReady').returns(false);
+      sandbox.stub(JavaReadiness, 'whenReady').resolves(false);
+      const gate = builder as unknown as Gate;
+      gate.autoDeployMode = 'Smart';
+      assert.strictEqual(await gate.waitForJavaReady(gate.smartDeployGeneration), false);
+    });
+
+    it('gives up when smart deploy is disposed while waiting for Java', async () => {
+      sandbox.stub(JavaReadiness, 'isReady').returns(false);
+      let release!: (value: boolean) => void;
+      sandbox.stub(JavaReadiness, 'whenReady').returns(new Promise(resolve => { release = resolve; }));
+      const gate = builder as unknown as Gate;
+      gate.autoDeployMode = 'Smart';
+      const pending = gate.waitForJavaReady(gate.smartDeployGeneration);
+      builder.disposeSmartDeploy();
+      release(true);
+      assert.strictEqual(await pending, false);
     });
   });
 });

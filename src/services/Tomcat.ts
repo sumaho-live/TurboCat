@@ -403,6 +403,14 @@ export class Tomcat {
     return this.startDebug(showMessages);
   }
 
+  /** Current server state for this project, used by smart deploy reload decisions. */
+  public async getRunState(): Promise<"stopped" | "run" | "debug"> {
+    if (!(await this.isTomcatRunning())) {
+      return "stopped";
+    }
+    return this.lastStartMode === "debug" ? "debug" : "run";
+  }
+
   /**
    * Application hot-reload handler
    *
