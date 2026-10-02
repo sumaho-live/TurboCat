@@ -476,11 +476,12 @@ describe('Builder Tests', () => {
       fs.writeFileSync(target, 'same');
       const past = new Date(Date.now() - 60000);
       fs.utimesSync(target, past, past);
+      const mtimeBefore = fs.statSync(target, { bigint: true }).mtimeNs;
 
       const copied = await (builder as unknown as Copier).copyFileWithLogging(source, target, 'class');
 
       assert.strictEqual(copied, false);
-      assert.strictEqual(fs.statSync(target).mtimeMs, past.getTime());
+      assert.strictEqual(fs.statSync(target, { bigint: true }).mtimeNs, mtimeBefore);
     });
 
     it('copies changed content once and skips the repeated trigger', async () => {
