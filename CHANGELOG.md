@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-10-06
+
+### Fixed
+- **PreBuilt Maven resources**: reuse generated deployment mappings to copy POM resources after compiled output, including resource directories, classpath-relative `targetPath`, include/exclude rules, and custom build output directories.
+- **Shared resource mappings**: Smart Deploy and PreBuilt use the same resource filters and path resolution; PreBuilt refreshes mappings on each deployment and applies them to the current deployment directory.
+- **Workspace overrides**: Maven projects retain `localDeploy` mappings alongside POM mappings, with local overrides applied after generated mappings.
+- **Eclipse mappings**: generate mappings from all `.classpath` output directories and source resource roots even when WTP metadata is absent.
+
 ## [1.7.0] - 2026-09-25
 
 ### Fixed

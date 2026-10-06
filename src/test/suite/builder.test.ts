@@ -205,6 +205,141 @@ describe('Builder Tests', () => {
       }
     });
 
+    it('overlays default Maven resources after syncing compiled output on every deployment', async () => {
+      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), '<project />');
+      const output = path.join(workspaceRoot, 'target', 'classes');
+      fs.mkdirSync(output, { recursive: true });
+      fs.writeFileSync(path.join(output, 'App.class'), 'compiled');
+      fs.writeFileSync(path.join(output, 'application.properties'), 'stale');
+      const resources = path.join(workspaceRoot, 'src', 'main', 'resources');
+      fs.mkdirSync(path.join(resources, 'nested'), { recursive: true });
+      fs.writeFileSync(path.join(resources, 'application.properties'), 'current');
+      fs.writeFileSync(path.join(resources, 'nested', 'config.xml'), '<config />');
+      const targetDir = path.join(workspaceRoot, 'deployed');
+      const deploy = () => (builder as unknown as {
+        preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string): Promise<void>;
+      }).preBuiltDeploy(workspaceRoot, targetDir, '/tmp/fake-tomcat');
+
+      await deploy();
+      fs.writeFileSync(path.join(resources, 'application.properties'), 'updated');
+      await deploy();
+
+      const classes = path.join(targetDir, 'WEB-INF', 'classes');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'App.class'), 'utf8'), 'compiled');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'application.properties'), 'utf8'), 'updated');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'nested', 'config.xml'), 'utf8'), '<config />');
+    });
+
+    it('applies POM resource roots, targetPath and include/exclude rules with custom output', async () => {
+      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
+      fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), [
+        '<project><build><outputDirectory>${project.basedir}/build/classes</outputDirectory><resources>',
+        '<resource><directory>${project.basedir}/config</directory><targetPath>settings</targetPath>',
+        '<includes><include>**/*.properties</include><include>**/*.xml</include></includes>',
+        '<excludes><exclude>**/secret.properties</exclude></excludes></resource>',
+        '<resource><directory>extra</directory></resource>',
+        '<resource><directory>missing-optional</directory></resource>',
+        '</resources></build></project>'
+      ].join(''));
+      const output = path.join(workspaceRoot, 'build', 'classes');
+      fs.mkdirSync(output, { recursive: true });
+      fs.writeFileSync(path.join(output, 'App.class'), 'compiled');
+      const resources = path.join(workspaceRoot, 'config');
+      fs.mkdirSync(path.join(resources, 'nested'), { recursive: true });
+      fs.writeFileSync(path.join(resources, 'app.properties'), 'config');
+      fs.writeFileSync(path.join(resources, 'nested', 'context.xml'), '<context />');
+      fs.writeFileSync(path.join(resources, 'nested', 'secret.properties'), 'excluded');
+      fs.writeFileSync(path.join(resources, 'notes.txt'), 'excluded');
+      fs.mkdirSync(path.join(workspaceRoot, 'extra'));
+      fs.writeFileSync(path.join(workspaceRoot, 'extra', 'logging.properties'), 'logging');
+      fs.mkdirSync(path.join(workspaceRoot, 'src', 'main', 'resources'), { recursive: true });
+      fs.writeFileSync(path.join(workspaceRoot, 'src', 'main', 'resources', 'ignored.properties'), 'not configured');
+      const targetDir = path.join(workspaceRoot, 'deployed');
+      await (builder as unknown as {
+        preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string): Promise<void>;
+      }).preBuiltDeploy(workspaceRoot, targetDir, '/tmp/fake-tomcat');
+
+      const classes = path.join(targetDir, 'WEB-INF', 'classes');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'App.class'), 'utf8'), 'compiled');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'settings', 'app.properties'), 'utf8'), 'config');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'settings', 'nested', 'context.xml'), 'utf8'), '<context />');
+      assert.strictEqual(fs.readFileSync(path.join(classes, 'logging.properties'), 'utf8'), 'logging');
+      assert.strictEqual(fs.existsSync(path.join(classes, 'settings', 'nested', 'secret.properties')), false);
+      assert.strictEqual(fs.existsSync(path.join(classes, 'settings', 'notes.txt')), false);
+      assert.strictEqual(fs.existsSync(path.join(classes, 'ignored.properties')), false);
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'settings')), false);
+    });
+
+    it('reuses POM mappings for watchers and refreshes them for PreBuilt with local overrides', async () => {
+      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
+      const pom = path.join(workspaceRoot, 'pom.xml');
+      const writePom = (targetPath: string) => fs.writeFileSync(pom,
+        `<project><build><resources><resource><directory>config</directory><targetPath>${targetPath}</targetPath><includes><include>**/*.properties</include></includes><excludes><exclude>**/secret.properties</exclude></excludes></resource></resources></build></project>`);
+      writePom('old');
+      fs.mkdirSync(path.join(workspaceRoot, 'target', 'classes'), { recursive: true });
+      const configDir = path.join(workspaceRoot, 'config', 'nested');
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(path.join(configDir, 'app.properties'), 'pom');
+      fs.writeFileSync(path.join(configDir, 'secret.properties'), 'excluded');
+      fs.writeFileSync(path.join(configDir, 'notes.txt'), 'excluded');
+      const vscodeDir = path.join(workspaceRoot, '.vscode');
+      fs.mkdirSync(vscodeDir);
+      fs.mkdirSync(path.join(workspaceRoot, 'override'));
+      fs.writeFileSync(path.join(workspaceRoot, 'override', 'app.properties'), 'local');
+      fs.writeFileSync(path.join(vscodeDir, 'tomcat-smart-deploy.json'), JSON.stringify({
+        localDeploy: { mappings: [
+          { source: 'override', destination: 'WEB-INF/classes/current/nested' },
+          { source: 'override', destination: 'disabled', enabled: false }
+        ] }
+      }));
+      const internals = builder as unknown as {
+        loadSmartDeployConfig(): Promise<{ mappings: Array<{ source: string; destination: string }> }>;
+        compileMappings(config: { mappings: Array<{ source: string; destination: string }> }): unknown[];
+        compiledMappings: unknown[];
+        findMatchingMapping(file: string): { destination: string } | null;
+        preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string): Promise<void>;
+      };
+      const config = await internals.loadSmartDeployConfig();
+      internals.compiledMappings = internals.compileMappings(config);
+      assert.strictEqual(internals.findMatchingMapping(path.join(configDir, 'app.properties'))?.destination,
+        'WEB-INF/classes/old/{relative}');
+      assert.strictEqual(internals.findMatchingMapping(path.join(configDir, 'secret.properties')), null);
+      assert.strictEqual(internals.findMatchingMapping(path.join(configDir, 'notes.txt')), null);
+
+      writePom('current');
+      const targetDir = path.join(workspaceRoot, 'explicit-target');
+      await internals.preBuiltDeploy(workspaceRoot, targetDir, '/tmp/fake-tomcat');
+      assert.strictEqual(fs.readFileSync(path.join(targetDir, 'WEB-INF', 'classes', 'current', 'nested', 'app.properties'), 'utf8'), 'local');
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'WEB-INF', 'classes', 'old')), false);
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'disabled')), false);
+    });
+
+    it('generates Eclipse mappings from classpath without WTP and reuses source resource mappings', async () => {
+      sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
+      fs.writeFileSync(path.join(workspaceRoot, '.classpath'),
+        '<classpath><classpathentry kind="src" path="source" output="build/generated"/><classpathentry kind="output" path="build/classes"/></classpath>');
+      fs.mkdirSync(path.join(workspaceRoot, 'source', 'nested'), { recursive: true });
+      fs.writeFileSync(path.join(workspaceRoot, 'source', 'nested', 'config.xml'), 'config');
+      fs.writeFileSync(path.join(workspaceRoot, 'source', 'App.java'), 'source');
+      for (const output of ['build/classes', 'build/generated']) {
+        fs.mkdirSync(path.join(workspaceRoot, output), { recursive: true });
+        fs.writeFileSync(path.join(workspaceRoot, output, path.basename(output) + '.class'), 'compiled');
+      }
+      await builder.ensureLocalConfigTemplate();
+      const config = JSON.parse(fs.readFileSync(path.join(workspaceRoot, '.vscode', 'tomcat-smart-deploy.json'), 'utf8')) as {
+        mappings: Array<{ source: string }>;
+      };
+      assert.ok(config.mappings.some(mapping => mapping.source === 'build/classes/**/*.class'));
+      assert.ok(config.mappings.some(mapping => mapping.source === 'build/generated/**/*.class'));
+      const targetDir = path.join(workspaceRoot, 'deployed');
+      await (builder as unknown as {
+        preBuiltDeploy(projectDir: string, targetDir: string, tomcatHome: string): Promise<void>;
+      }).preBuiltDeploy(workspaceRoot, targetDir, '/tmp/fake-tomcat');
+      assert.strictEqual(fs.readFileSync(path.join(targetDir, 'WEB-INF', 'classes', 'nested', 'config.xml'), 'utf8'), 'config');
+      assert.strictEqual(fs.existsSync(path.join(targetDir, 'WEB-INF', 'classes', 'App.java')), false);
+    });
+
     it('deploys a pure Eclipse WTP project using its configured output and all web roots', async () => {
       sandbox.stub(Tomcat.getInstance(), 'findTomcatHome').resolves(null);
       fs.writeFileSync(

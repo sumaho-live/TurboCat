@@ -99,6 +99,9 @@ interface SmartDeployMapping {
   description?: string; // Optional description
   extensions?: string[]; // File extensions to include
   excludeExtensions?: string[]; // File extensions to exclude
+  sourceRoot?: string; // Base directory for resource-relative paths and filters
+  includes?: string[];
+  excludes?: string[];
 }
 
 interface LocalDeployMapping {
@@ -245,7 +248,7 @@ class MavenConfigParser implements BuildConfigParser {
   /**
    * Parse Maven pom.xml and extract build configuration
    */
-  private async parsePomXml(): Promise<MavenConfig> {
+  public async parsePomXml(): Promise<MavenConfig> {
     if (this.mavenConfig) {
       return this.mavenConfig;
     }
@@ -451,6 +454,13 @@ class MavenConfigParser implements BuildConfigParser {
     return warConfig;
   }
 
+  private projectRelativeDirectory(directory: string): string {
+    return path.relative(this.workspaceRoot, path.resolve(
+      this.workspaceRoot,
+      directory.replace(/\$\{(?:project\.)?basedir\}/g, this.workspaceRoot),
+    )).replace(/\\/g, "/") || ".";
+  }
+
   /**
    * Generate resource mappings from Maven configuration
    */
@@ -459,7 +469,7 @@ class MavenConfigParser implements BuildConfigParser {
     const mappings: SmartDeployMapping[] = [];
 
     // 1. Java compiled classes mapping
-    const outputDir = config.outputDirectory || "target/classes";
+    const outputDir = this.projectRelativeDirectory(config.outputDirectory || "target/classes");
     mappings.push({
       source: `${outputDir}/**/*.class`,
       destination: "WEB-INF/classes/{relative}",
@@ -471,10 +481,14 @@ class MavenConfigParser implements BuildConfigParser {
     // 2. Resources mappings
     if (config.resources) {
       for (const resource of config.resources) {
-        const targetPath = resource.targetPath || "WEB-INF/classes";
+        const directory = this.projectRelativeDirectory(resource.directory);
+        const targetPath = path.join("WEB-INF/classes", resource.targetPath || "").replace(/\\/g, "/");
 
         mappings.push({
-          source: `${resource.directory}/**/*`,
+          source: `${directory}/**/*`,
+          sourceRoot: directory,
+          includes: resource.includes,
+          excludes: resource.excludes,
           destination: `${targetPath}/{relative}`,
           needsReload: true,
           description: `Maven resource: ${resource.directory}`,
@@ -484,8 +498,9 @@ class MavenConfigParser implements BuildConfigParser {
     }
 
     // 3. Web application resources mapping
-    const warSourceDir =
-      config.warConfig?.warSourceDirectory || "src/main/webapp";
+    const warSourceDir = this.projectRelativeDirectory(
+      config.warConfig?.warSourceDirectory || "src/main/webapp",
+    );
     mappings.push({
       source: `${warSourceDir}/**/*`,
       destination: "{relative}",
@@ -914,15 +929,14 @@ export class Builder {
   }
 
   /**
-   * Build smart deploy mappings from WTP component and detected project roots.
-   * Replaces the hardcoded DEFAULT_MAPPINGS template with mappings that reflect
-   * the actual Eclipse WTP configuration.
+   * Build Eclipse smart mappings from classpath outputs and detected WTP roots.
+   * Also supports classpath-only projects and plain projects with WTP metadata.
    */
   private buildWtpSmartDeployMappings(
     workspaceRoot: string,
   ): SmartDeployMapping[] {
-    const wtp = this.parseEclipseWtpComponent(workspaceRoot);
-    if (!wtp) {
+    const hasClasspath = fs.existsSync(path.join(workspaceRoot, ".classpath"));
+    if (!hasClasspath && !this.parseEclipseWtpComponent(workspaceRoot)) {
       return [];
     }
 
@@ -930,14 +944,18 @@ export class Builder {
     const mappings: SmartDeployMapping[] = [];
 
     // Class mapping from java output dir
-    const outputDir = structure.javaOutputDir || "bin";
-    mappings.push({
-      source: `${outputDir}/**/*.class`,
-      destination: "WEB-INF/classes/{relative}",
-      needsReload: true,
-      description: "Eclipse WTP: compiled classes",
-      extensions: [".class"],
-    });
+    const outputs = hasClasspath
+      ? EclipseMetadataParser.parseClasspath(workspaceRoot).outputDirectories
+      : [structure.javaOutputDir || "bin"];
+    for (const outputDir of outputs) {
+      mappings.push({
+        source: `${outputDir}/**/*.class`,
+        destination: "WEB-INF/classes/{relative}",
+        needsReload: true,
+        description: "Eclipse: compiled classes",
+        extensions: [".class"],
+      });
+    }
 
     // Web resource mapping from each web resource root
     for (const root of structure.webResourceRoots) {
@@ -954,7 +972,7 @@ export class Builder {
 
     // Resource mappings (if javaSourceRoots differ from default)
     for (const root of structure.javaSourceRoots) {
-      if (root && root !== outputDir) {
+      if (root && !outputs.includes(root)) {
         mappings.push({
           source: `${root}/**/*`,
           destination: "WEB-INF/classes/{relative}",
@@ -2667,7 +2685,7 @@ export class Builder {
     }
 
     report("Applying workspace mappings...", 15);
-    await this.applyLocalDeployMappings();
+    await this.applyDeployMappings();
 
     const libDir = path.join(projectDir, "lib");
     const targetLib = path.join(targetDir, "WEB-INF", "lib");
@@ -2688,21 +2706,23 @@ export class Builder {
   }
 
   /**
-   * Apply additional local deploy mappings defined in the workspace configuration.
+   * Apply workspace mappings, optionally including generated POM/Eclipse mappings.
+   * Full deployment supplies its target explicitly; watchers resolve it from Tomcat.
    */
-  private async applyLocalDeployMappings(): Promise<void> {
+  private async applyDeployMappings(
+    options: { targetDir?: string; includeSmart?: boolean } = {},
+  ): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return;
     }
 
-    const tomcatHome = await this.getTomcat().findTomcatHome();
-    if (!tomcatHome) {
+    if (!options.targetDir && !(await this.getTomcat().findTomcatHome())) {
       return;
     }
 
     try {
-      if (!this.smartDeployConfig) {
+      if (options.includeSmart || !this.smartDeployConfig) {
         this.smartDeployConfig = await this.loadSmartDeployConfig();
       }
 
@@ -2710,23 +2730,26 @@ export class Builder {
         return;
       }
 
-      if (!this.compiledMappings) {
+      if (options.includeSmart) {
+        this.projectStructure = this.detectProjectStructure();
+      }
+      if (options.includeSmart || !this.compiledMappings) {
         this.compiledMappings = this.compileMappings(this.smartDeployConfig);
       }
 
-      const localMappings = (this.compiledMappings || []).filter(
-        (mapping) => mapping.origin === "local",
-      );
-      if (!localMappings.length) {
+      const deployMappings = (this.compiledMappings || []).filter(
+        (mapping) => options.includeSmart || mapping.origin === "local",
+      ).sort((a, b) => Number(a.origin === "local") - Number(b.origin === "local"));
+      if (!deployMappings.length) {
         return;
       }
 
-      const visitedTargets = new Set<string>();
-
-      for (const mapping of localMappings) {
+      // Copy generated sources first, then let local overrides win.
+      for (const mapping of deployMappings) {
         const absolutePattern = path.join(workspaceRoot, mapping.source);
         const matches = await glob(absolutePattern, {
           nodir: true,
+          dot: true,
           windowsPathsNoEscape: process.platform === "win32",
         });
 
@@ -2738,29 +2761,29 @@ export class Builder {
         }
 
         for (const sourceFile of matches) {
+          if (!this.mappingAcceptsFile(mapping, sourceFile)) {
+            continue;
+          }
           const targetPath = await this.generateDestinationPath(
             mapping,
             sourceFile,
+            { webappDir: options.targetDir },
           );
           if (!targetPath) {
             continue;
           }
 
-          let targetKey = targetPath;
-          try {
-            const stats = fs.statSync(sourceFile);
-            targetKey = `${targetPath}|${stats.mtimeMs}`;
-          } catch {
-            // ignore stat errors; still attempt to copy
-          }
-
-          if (!visitedTargets.has(targetKey)) {
+          if (options.targetDir) {
+            await fsp.copyFile(sourceFile, targetPath);
+          } else {
             await this.copyFileWithLogging(sourceFile, targetPath, "local");
-            visitedTargets.add(targetKey);
           }
         }
       }
     } catch (error) {
+      if (options.includeSmart) {
+        throw error;
+      }
       this.smartLog.warn(`Local deploy mapping sync skipped: ${error}`);
     }
   }
@@ -2783,7 +2806,6 @@ export class Builder {
     };
 
     const structure = this.projectStructure ?? this.detectProjectStructure();
-    const isMaven = structure.type === "maven";
 
     // Validate at least one build marker exists
     const hasPom = fs.existsSync(path.join(projectDir, "pom.xml"));
@@ -2794,9 +2816,18 @@ export class Builder {
       );
     }
 
+    const isMaven = hasPom;
+    const mavenConfig = hasPom
+      ? await new MavenConfigParser(projectDir, this.getLogger()).parsePomXml()
+      : undefined;
+    const resolveProjectPath = (value: string) => path.resolve(
+      projectDir,
+      value.replace(/\$\{(?:project\.)?basedir\}/g, projectDir),
+    );
+
     // Determine the compiled output directory
     const classDirectories = isMaven
-      ? [path.join(projectDir, "target", "classes")]
+      ? [resolveProjectPath(mavenConfig?.outputDirectory || "target/classes")]
       : EclipseMetadataParser.parseClasspath(projectDir).outputDirectories
           .map((output) => path.join(projectDir, output))
           .filter((output) => fs.existsSync(output));
@@ -2876,7 +2907,7 @@ export class Builder {
     }
 
     report("Applying workspace mappings...", 10);
-    await this.applyLocalDeployMappings();
+    await this.applyDeployMappings({ targetDir, includeSmart: true });
 
     report("Pre-built deployment complete", 0);
 
@@ -3261,6 +3292,17 @@ export class Builder {
           },
         };
 
+        // POM owns generated mappings, while workspace-local overrides still apply.
+        if (fs.existsSync(configPath)) {
+          try {
+            const workspaceConfig = JSON.parse(await fsp.readFile(configPath, "utf-8")) as SmartDeployConfig;
+            mavenConfig.localDeploy = workspaceConfig.localDeploy;
+          } catch (error) {
+            this.smartLog.warn(`Failed to load local deploy overrides: ${error}`);
+          }
+        }
+        this.ensureLocalDeployStructure(mavenConfig);
+
         this.smartLog.info(
           `Loaded smart deploy configuration from Maven pom.xml: ${mappings.length} mappings`,
         );
@@ -3599,18 +3641,8 @@ export class Builder {
       const regexMatch = mapping.sourceRegex.test(relativePath);
 
       if (regexMatch) {
-        const ext = path.extname(filePath).toLowerCase();
-
-        if (mapping.extensions) {
-          if (!mapping.extensions.includes(ext)) {
-            continue;
-          }
-        }
-
-        if (mapping.excludeExtensions) {
-          if (mapping.excludeExtensions.includes(ext)) {
-            continue;
-          }
+        if (!this.mappingAcceptsFile(mapping, filePath)) {
+          continue;
         }
 
         this.smartLog.debug(`Matched: ${relativePath} → ${mapping.description}`);
@@ -3622,39 +3654,52 @@ export class Builder {
     return null;
   }
 
+  private mappingAcceptsFile(mapping: SmartDeployMapping, filePath: string): boolean {
+    const ext = path.extname(filePath).toLowerCase();
+    if (mapping.extensions && !mapping.extensions.includes(ext)) {
+      return false;
+    }
+    if (mapping.excludeExtensions?.includes(ext)) {
+      return false;
+    }
+    const relative = path.relative(
+      path.resolve(this.getWorkspaceRoot() || "", mapping.sourceRoot || ""),
+      filePath,
+    ).replace(/\\/g, "/");
+    const matches = (pattern: string) => new RegExp(`^${this.globToRegex(pattern)}$`).test(relative);
+    return (!mapping.includes?.length || mapping.includes.some(matches)) &&
+      !mapping.excludes?.some(matches);
+  }
+
   /**
    * Generate destination path from mapping and source file with proper relative path handling
    */
   private async generateDestinationPath(
     mapping: CompiledMapping,
     sourceFile: string,
-    options: { ensureParent?: boolean } = {},
+    options: { ensureParent?: boolean; webappDir?: string } = {},
   ): Promise<string> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       return "";
     }
 
-    const webappsRoot = await this.getTomcat().getWebappsRoot();
-    if (!webappsRoot) {
-      return "";
+    let webappDir = options.webappDir;
+    if (!webappDir) {
+      const webappsRoot = await this.getTomcat().getWebappsRoot();
+      if (!webappsRoot) {
+        return "";
+      }
+      webappDir = path.join(webappsRoot, this.projectStructure?.webappName || "");
     }
-
-    // Get the webapp directory
-    const webappDir = path.join(
-      webappsRoot,
-      this.projectStructure?.webappName || "",
-    );
 
     // Get relative path from workspace
     const relativePath = path.relative(workspaceRoot, sourceFile);
 
     // Extract the correct relative portion based on the mapping source pattern
-    const relativePortion = this.extractRelativePortionFromMapping(
-      mapping,
-      relativePath,
-      sourceFile,
-    );
+    const relativePortion = mapping.sourceRoot !== undefined
+      ? path.relative(path.resolve(workspaceRoot, mapping.sourceRoot), sourceFile)
+      : this.extractRelativePortionFromMapping(mapping, relativePath, sourceFile);
 
     // Replace {relative} placeholder with actual relative path
     let destinationPath = mapping.destination;
