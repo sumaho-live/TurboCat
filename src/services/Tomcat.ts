@@ -552,7 +552,7 @@ export class Tomcat {
       }
 
       const pid = ownership.pid;
-      if (this.processOwnership.isProcessAlive(pid)) {
+      if (await this.processOwnership.isRecordedTomcatAlive(ownership)) {
         if (process.platform === "win32") {
           await execAsync(`taskkill /F /T /PID ${pid}`).catch(() => undefined);
         } else {
@@ -562,6 +562,10 @@ export class Tomcat {
             await execAsync(`kill -9 ${pid}`).catch(() => undefined);
           }
         }
+      } else if (this.processOwnership.isProcessAlive(pid)) {
+        this.logger.warn(
+          `Skipped forced termination: PID ${pid} is no longer this project's Tomcat.`,
+        );
       }
       await this.processOwnership.removeIfOwned(
         catalinaBase,

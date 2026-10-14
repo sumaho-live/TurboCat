@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -53,5 +54,44 @@ describe("Tomcat process ownership", () => {
 
     await ownership.removeIfOwned(tempRoot, process.pid + 1, workspaceUri);
     assert.ok(await ownership.read(tempRoot));
+  });
+
+  it("rejects a live PID that no longer runs the recorded Tomcat", async () => {
+    const ownership = new ProcessOwnership();
+    const record = await ownership.record({
+      pid: process.pid,
+      workspaceUri: "file:///test/project-c",
+      catalinaHome: path.join(tempRoot, "home"),
+      catalinaBase: tempRoot,
+      httpPort: 8080,
+      shutdownPort: 8005,
+      mode: "run",
+    });
+
+    assert.strictEqual(await ownership.isRecordedTomcatAlive(record), false);
+  });
+
+  it("accepts a live process launched with the recorded catalina.base", async () => {
+    const ownership = new ProcessOwnership();
+    const child = spawn(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 30000)", `-Dcatalina.base=${tempRoot}`],
+      { stdio: "ignore" },
+    );
+    try {
+      const record = await ownership.record({
+        pid: child.pid as number,
+        workspaceUri: "file:///test/project-d",
+        catalinaHome: path.join(tempRoot, "home"),
+        catalinaBase: tempRoot,
+        httpPort: 8080,
+        shutdownPort: 8005,
+        mode: "run",
+      });
+
+      assert.strictEqual(await ownership.isRecordedTomcatAlive(record), true);
+    } finally {
+      child.kill();
+    }
   });
 });

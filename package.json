@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with project-local configuration isolation and smart file synchronization for Java web projects",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -96,8 +96,8 @@
     "grammars": [
       {
         "language": "turbocat-log",
-        "scopeName": "source.turbocat-log",
-        "path": "./syntaxes/turbocat-log.tmLanguage.json"
+        "scopeName": "source.tomcat-log",
+        "path": "./syntaxes/tomcat-log.tmLanguage.json"
       }
     ],
     "commands": [

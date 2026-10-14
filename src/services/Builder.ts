@@ -622,6 +622,7 @@ export class Builder {
   private readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
   private autoDeployMode: "Disable" | "Smart";
   private isDeploying = false;
+  private deployInFlight?: Promise<void>;
   private attempts = 0;
   private preferredBuildType:
     "Auto" | "Local" | "Maven" | "Gradle" | "PreBuilt";
@@ -1182,7 +1183,23 @@ export class Builder {
    * @param type Build strategy ('Local' | 'Maven' | 'Gradle' | 'Choice')
    * @log Deployment progress and errors
    */
-  public async deploy(
+  public deploy(
+    type: "Local" | "Maven" | "Gradle" | "PreBuilt" | "Choice",
+  ): Promise<void> {
+    // Two pipelines writing the same webapp directory corrupt each other;
+    // a second request while one is running joins the running deployment.
+    if (this.deployInFlight) {
+      this.getLogger().info("Deployment already in progress", true);
+      return this.deployInFlight;
+    }
+    const run = this.runDeploy(type).finally(() => {
+      this.deployInFlight = undefined;
+    });
+    this.deployInFlight = run;
+    return run;
+  }
+
+  private async runDeploy(
     type: "Local" | "Maven" | "Gradle" | "PreBuilt" | "Choice",
   ): Promise<void> {
     const projectDir = this.getWorkspaceRoot();
@@ -1316,10 +1333,10 @@ export class Builder {
       if (isBusyError && this.attempts < 3) {
         this.attempts++;
         await this.getTomcat().stop(false);
-        // Recursive retry: the inner deploy() call will see autoDeployMode
+        // Recursive retry: the inner runDeploy() call will see autoDeployMode
         // already Disabled and skip its own pause; when it returns, this
         // outer finally will correctly restore the original Smart state.
-        await this.deploy(buildType);
+        await this.runDeploy(buildType);
       } else {
         this.attempts = 0;
         this.getLogger().error(`${buildType} build failed:`, true, errorMessage);
@@ -2592,7 +2609,11 @@ export class Builder {
 
     report("Validating project layout...", 5);
 
-    const javacPath = path.join(javaHome, "bin", "javac");
+    const javacPath = path.join(
+      javaHome,
+      "bin",
+      `javac${process.platform === "win32" ? ".exe" : ""}`,
+    );
     const classesDir = path.join(targetDir, "WEB-INF", "classes");
 
     report("Synchronizing web resources...", 25);
@@ -2972,10 +2993,10 @@ export class Builder {
     } catch (err) {
       const errorOutput = err?.toString() || "";
 
-      // Log the full raw output first so it appears in the TurboCat channel
+      // Log the tail of the raw output so it appears in the TurboCat channel
       if (errorOutput.trim()) {
         this.getLogger().error(`Maven build failed. Raw output:`, false);
-        errorOutput.split("\n").forEach((line) => {
+        errorOutput.split("\n").slice(-200).forEach((line) => {
           if (line.trim()) {
             this.getLogger().appendRawLine(`  ${line.trim()}`);
           }

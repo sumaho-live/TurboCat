@@ -54,6 +54,27 @@ describe('Builder Tests', () => {
     });
   });
 
+  describe('deploy()', () => {
+    it('joins a running deployment instead of starting a second one', async () => {
+      let finish!: () => void;
+      const internal = builder as unknown as { runDeploy(type: string): Promise<void> };
+      const runDeploy = sandbox.stub(internal, 'runDeploy').callsFake(
+        () => new Promise<void>((resolve) => { finish = resolve; }),
+      );
+
+      const first = builder.deploy('Choice');
+      const second = builder.deploy('Choice');
+      finish();
+      await Promise.all([first, second]);
+
+      assert.strictEqual(runDeploy.callCount, 1);
+
+      runDeploy.resolves();
+      await builder.deploy('Choice');
+      assert.strictEqual(runDeploy.callCount, 2);
+    });
+  });
+
   describe('detectProjectStructure()', () => {
     it('uses the Maven artifactId as the default webapp name', () => {
       fs.writeFileSync(path.join(workspaceRoot, 'pom.xml'), [

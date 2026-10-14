@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-10-15
+
+### Fixed
+- **Maven/Gradle builds hanging**: build output on stdout is now drained, so a verbose Maven build can no longer fill the pipe and block forever. Failures report stdout as well as stderr, so Maven `[ERROR]` lines are shown again.
+- **Maven/Gradle on Windows**: `mvn`, `mvn.cmd` and `gradlew.bat` are launched through `cmd.exe` with escaped arguments; Node 20 refuses to spawn batch files directly and does not resolve `mvn` via PATHEXT.
+- **TurboCat log highlighting**: the grammar contribution now points to the bundled `syntaxes/tomcat-log.tmLanguage.json` with a matching scope name.
+- **Forced stop safety**: before force-killing, TurboCat verifies that the recorded PID still runs Tomcat for this project's `CATALINA_BASE`, so a PID reused after a crash or reboot is never killed.
+- **Concurrent deployments**: triggering Deploy while a deployment is running joins the running one instead of starting a second pipeline into the same webapp directory.
+
 ## [1.7.1] - 2026-10-06
 
 ### Fixed
