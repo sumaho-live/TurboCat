@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-10-15
+
+### Fixed
+- **SVN/Git update restarting Tomcat**: changes that are not preceded by an editor save in the last 30 seconds (SVN/Git update, external builds) are still smart-deployed, but no longer restart Tomcat automatically; TurboCat shows a single notification with a **Restart Tomcat** button instead.
+- **VCS metadata ignored by Smart Deploy**: files inside `.svn`, `.git`, `.hg` or `CVS` directories are never copied to Tomcat or counted as reload triggers.
+
 ## [1.7.2] - 2026-10-15
 
 ### Fixed

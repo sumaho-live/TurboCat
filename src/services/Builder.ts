@@ -641,6 +641,11 @@ export class Builder {
   // Debounces/serializes Tomcat restarts requested by mappings with needsReload
   private readonly reloadDebouncer = new KeyedDebouncer();
   private readonly pendingReloadReasons = new Set<string>();
+  // Last editor save in this folder; reloads without a recent save come from
+  // outside the editor (svn/git update, external builds) and are only offered
+  private lastEditorSaveAt = 0;
+  private externalReloadPrompt?: Thenable<unknown>;
+  private static readonly EDITOR_SAVE_WINDOW_MS = 30000;
   // Source fingerprint (mtime:size) of the last smart-deployed copy, keyed by target path
   private readonly deployedFingerprints = new Map<string, string>();
   private static readonly STATIC_SETTLE_MS = 120;
@@ -1482,6 +1487,7 @@ export class Builder {
   public async autoDeploy(
     _reason: vscode.TextDocumentSaveReason,
   ): Promise<void> {
+    this.lastEditorSaveAt = Date.now();
     if (this.isDeploying || !Builder.isJavaEEProject()) {
       return;
     }
@@ -1864,12 +1870,12 @@ export class Builder {
       return;
     }
 
-    // Skip hidden files, temp files, and handle Java files specially
+    // Skip hidden files, temp files, VCS metadata, and handle Java files specially
     if (
       fileName.startsWith(".") ||
       fileName.endsWith(".tmp") ||
       fileName.endsWith(".temp") ||
-      fileExt === ".svn"
+      Builder.isInVcsMetadata(uri.fsPath)
     ) {
       this.smartLog.debug(`Skipping file: ${fileName} (temp/hidden file)`);
       return;
@@ -2132,6 +2138,12 @@ export class Builder {
 
     // Use batch deployment for compiled files
     this.addToBatchDeployment(uri.fsPath, eventType);
+  }
+
+  private static isInVcsMetadata(filePath: string): boolean {
+    return filePath
+      .split(/[\\/]/)
+      .some((segment) => [".svn", ".git", ".hg", "CVS"].includes(segment));
   }
 
   /**
@@ -2474,11 +2486,40 @@ export class Builder {
         this.smartLog.info(
           `Debug mode: relying on debugger hot swap, Tomcat not restarted (${summary})`,
         );
+      } else if (
+        Date.now() - this.lastEditorSaveAt >
+        Builder.EDITOR_SAVE_WINDOW_MS
+      ) {
+        this.offerExternalReload(summary);
       } else {
         this.smartLog.info(`Restarting Tomcat to apply: ${summary}`);
         await this.getTomcat().reload();
       }
     });
+  }
+
+  /**
+   * Changes not preceded by an editor save (svn/git update, external builds)
+   * are deployed but never restart Tomcat on their own; ask instead.
+   */
+  private offerExternalReload(summary: string): void {
+    this.smartLog.info(
+      `Changes from outside the editor deployed; Tomcat not restarted automatically (${summary})`,
+    );
+    if (this.externalReloadPrompt) {
+      return;
+    }
+    this.externalReloadPrompt = vscode.window
+      .showInformationMessage(
+        `Files changed outside the editor (e.g. SVN/Git update) were deployed: ${summary}. Restart Tomcat to apply them?`,
+        "Restart Tomcat",
+      )
+      .then(async (choice) => {
+        this.externalReloadPrompt = undefined;
+        if (choice === "Restart Tomcat") {
+          await this.getTomcat().reload();
+        }
+      });
   }
 
   /**

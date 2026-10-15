@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with project-local configuration isolation and smart file synchronization for Java web projects",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -226,7 +226,7 @@
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "description": "Restart Tomcat after smart deploy updates classes or resources whose mapping needs a reload. Skipped in debug mode, where the debugger hot-swaps classes."
+          "description": "Restart Tomcat after smart deploy updates classes or resources whose mapping needs a reload. Skipped in debug mode, where the debugger hot-swaps classes. Only automatic after an editor save; changes from SVN/Git update or external builds prompt before restarting."
         },
         "turbocat.preferredBuildType": {
           "type": "string",

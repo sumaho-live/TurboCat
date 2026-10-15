@@ -657,16 +657,18 @@ describe('Builder Tests', () => {
   describe('scheduleReloadIfNeeded()', () => {
     type Reloader = {
       autoDeployMode: string;
+      lastEditorSaveAt: number;
       scheduleReloadIfNeeded(mapping: { needsReload: boolean }, file: string): void;
     };
 
-    const runReload = async (state: 'stopped' | 'run' | 'debug', needsReload = true) => {
+    const runReload = async (state: 'stopped' | 'run' | 'debug', needsReload = true, savedRecently = true) => {
       const tomcat = Tomcat.getInstance();
       sandbox.stub(tomcat, 'getRunState').resolves(state);
       const reload = sandbox.stub(tomcat, 'reload').resolves();
-      const clock = sandbox.useFakeTimers();
+      const clock = sandbox.useFakeTimers({ now: 1_000_000 });
       const reloader = builder as unknown as Reloader;
       reloader.autoDeployMode = 'Smart';
+      reloader.lastEditorSaveAt = savedRecently ? Date.now() : 0;
       reloader.scheduleReloadIfNeeded({ needsReload }, '/x/A.class');
       reloader.scheduleReloadIfNeeded({ needsReload }, '/x/B.class');
       await clock.tickAsync(5000);
@@ -684,6 +686,21 @@ describe('Builder Tests', () => {
       assert.strictEqual(await runReload('stopped'), 0);
       sandbox.restore();
       assert.strictEqual(await runReload('run', false), 0);
+    });
+
+    it('only offers a restart for changes not preceded by an editor save (svn update)', async () => {
+      const prompt = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+      assert.strictEqual(await runReload('run', true, false), 0);
+      assert.strictEqual(prompt.callCount, 1);
+    });
+  });
+
+  describe('isInVcsMetadata()', () => {
+    it('matches files inside VCS metadata directories only', () => {
+      const check = (Builder as unknown as { isInVcsMetadata(p: string): boolean }).isInVcsMetadata;
+      assert.strictEqual(check('/p/src/main/webapp/.svn/pristine/ab/x.svn-base'), true);
+      assert.strictEqual(check('C:\\p\\WebContent\\.git\\index'), true);
+      assert.strictEqual(check('/p/src/main/webapp/svn/index.jsp'), false);
     });
   });
 

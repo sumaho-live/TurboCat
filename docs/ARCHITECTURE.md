@@ -56,6 +56,8 @@ src/
   - Static resources (`src/**/*`) deploy immediately.
   - Compiled classes (`target/classes`, `build/classes`, etc.) are batched before syncing.
 - Coordinates batch reload decisions and maps file changes to Tomcat destinations.
+  - Restarts automatically only when an editor save happened in the last 30 s; otherwise (SVN/Git update, external builds) it prompts.
+  - Ignores files inside VCS metadata directories (`.svn`, `.git`, `.hg`, `CVS`).
 - Deploys to the effective runtime `webapps` directory, which is workspace-local by default.
 - Normalises the configured deployment directory (`turbocat.deployPath`) before generating targets.
 
