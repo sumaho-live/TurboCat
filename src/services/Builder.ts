@@ -1284,12 +1284,27 @@ export class Builder {
 
       this.getTomcat().setAppName(appName);
 
-      if (!tomcatHome || !appName) {
+      if (!tomcatHome) {
+        this.getLogger().warn(
+          "Deployment aborted: no valid Tomcat home configured (turbocat.home)",
+          true,
+        );
+        return;
+      }
+      if (!appName) {
+        this.getLogger().warn(
+          "Deployment aborted: could not determine the webapp name (turbocat.deployPath)",
+          true,
+        );
         return;
       }
 
       const webappsRoot = await this.getTomcat().getWebappsRoot(tomcatHome);
       if (!webappsRoot) {
+        this.getLogger().warn(
+          "Deployment aborted: could not resolve the Tomcat webapps directory",
+          true,
+        );
         return;
       }
 
@@ -1342,13 +1357,19 @@ export class Builder {
       const endTime = performance.now();
       const duration = Math.round(endTime - startTime);
 
-      if (fs.existsSync(targetDir)) {
+      // Gradle (and Maven without exploded output) deploy only a WAR
+      if (fs.existsSync(targetDir) || fs.existsSync(`${targetDir}.war`)) {
         this.getLogger().success(
           `${buildType} build completed in ${duration}ms`,
           true,
         );
         await new Promise((resolve) => setTimeout(resolve, 100));
         await this.getTomcat().reload();
+      } else {
+        this.getLogger().warn(
+          `${buildType} deployment finished but nothing was deployed to ${targetDir}`,
+          true,
+        );
       }
 
       this.attempts = 0;
@@ -2675,7 +2696,7 @@ export class Builder {
     }
     const javaHome = await this.getTomcat().findJavaHome();
     if (!javaHome) {
-      return;
+      throw new Error("No valid JDK configured (turbocat.javaHome); javac is required for Local deployment.");
     }
 
     report("Validating project layout...", 5);
@@ -3144,11 +3165,15 @@ export class Builder {
             `mvn${process.platform === "win32" ? ".cmd" : ""}`,
           )
         : "mvn";
-      this.getLogger().info(`Maven command: ${mvnCmd} clean package`);
+      const mvnArgs = ["clean", "package"];
+      if (this.getConfiguration().get<boolean>("mavenSkipTests", false)) {
+        mvnArgs.push("-DskipTests");
+      }
+      this.getLogger().info(`Maven command: ${mvnCmd} ${mvnArgs.join(" ")}`);
 
       await this.executeCommandSpawn(
         mvnCmd,
-        ["clean", "package"],
+        mvnArgs,
         projectDir,
         Object.keys(mvnEnv).length ? mvnEnv : undefined,
       );
@@ -3192,27 +3217,70 @@ export class Builder {
     }
 
     const targetPath = path.join(projectDir, "target");
-    const warFiles = (await fsp.readdir(targetPath))
-      .filter((file: string) => file.toLowerCase().endsWith(".war"));
-    if (warFiles.length === 0) {
+    const mavenConfig = await new MavenConfigParser(
+      projectDir,
+      this.getLogger(),
+    ).parsePomXml();
+    const warFilePath = await this.pickWarFile(targetPath, [
+      mavenConfig.finalName,
+    ]);
+    if (!warFilePath) {
       throw new Error("No WAR file found after Maven build.");
     }
+    const warFolderPath = path.join(
+      targetPath,
+      path.basename(warFilePath, ".war"),
+    );
 
-    const warFileName = warFiles[0];
-    const warFilePath = path.join(targetPath, warFileName);
-
-    const warBaseName = path.basename(warFileName, ".war");
-    const warFolderPath = path.join(targetPath, warBaseName);
-
-    await fsp.rm(targetDir, { recursive: true, force: true });
+    // Deploy either the exploded directory or the WAR, never both: with both
+    // present Tomcat may unpack the WAR over the directory or redeploy twice.
     await fsp.rm(`${targetDir}.war`, { force: true });
-
-    await fsp.copyFile(warFilePath, `${targetDir}.war`);
-
     if (fs.existsSync(warFolderPath)) {
-      await fsp.mkdir(targetDir, { recursive: true });
-      await this.copyDirectory(warFolderPath, targetDir);
+      this.getLogger().info(
+        `Deploying exploded Maven output ${path.relative(projectDir, warFolderPath)}`,
+      );
+      await DirectorySynchronizer.sync(warFolderPath, targetDir);
+    } else {
+      this.getLogger().info(
+        `Deploying Maven WAR ${path.relative(projectDir, warFilePath)}`,
+      );
+      await fsp.rm(targetDir, { recursive: true, force: true });
+      await fsp.copyFile(warFilePath, `${targetDir}.war`);
     }
+  }
+
+  /**
+   * Choose the WAR a build produced: a preferred base name if present,
+   * otherwise the newest WAR, ignoring Spring Boot's "-plain" variant.
+   */
+  private async pickWarFile(
+    directory: string,
+    preferredBaseNames: Array<string | undefined>,
+  ): Promise<string | undefined> {
+    const names = await fsp.readdir(directory).catch(() => [] as string[]);
+    const wars = names.filter((name) => name.toLowerCase().endsWith(".war"));
+    for (const base of preferredBaseNames) {
+      if (base && !base.includes("${") && wars.includes(`${base}.war`)) {
+        return path.join(directory, `${base}.war`);
+      }
+    }
+
+    const nonPlain = wars.filter((name) => !name.endsWith("-plain.war"));
+    const candidates = nonPlain.length ? nonPlain : wars;
+    let newest: { file: string; mtime: number } | undefined;
+    for (const name of candidates) {
+      const file = path.join(directory, name);
+      const mtime = (await fsp.stat(file)).mtimeMs;
+      if (!newest || mtime > newest.mtime) {
+        newest = { file, mtime };
+      }
+    }
+    if (newest && candidates.length > 1) {
+      this.getLogger().info(
+        `Multiple WAR files found (${candidates.join(", ")}); using ${path.basename(newest.file)}`,
+      );
+    }
+    return newest?.file;
   }
 
   /**
@@ -3235,20 +3303,34 @@ export class Builder {
     targetDir: string,
     appName: string,
   ) {
-    if (!fs.existsSync(path.join(projectDir, "build.gradle"))) {
-      throw new Error("build.gradle not found.");
+    if (
+      !fs.existsSync(path.join(projectDir, "build.gradle")) &&
+      !fs.existsSync(path.join(projectDir, "build.gradle.kts"))
+    ) {
+      throw new Error("build.gradle or build.gradle.kts not found.");
     }
 
-    const gradleCmd =
-      process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+    // Prefer the project's wrapper; fall back to gradle on PATH
+    const wrapper = path.join(
+      projectDir,
+      process.platform === "win32" ? "gradlew.bat" : "gradlew",
+    );
+    const gradleCmd = fs.existsSync(wrapper) ? wrapper : "gradle";
+    if (gradleCmd === "gradle") {
+      this.getLogger().info("Gradle wrapper not found; using gradle from PATH");
+    }
     await this.executeCommandSpawn(
       gradleCmd,
       ["war", `-PfinalName=${appName}`],
       projectDir,
     );
 
-    const warFile = path.join(projectDir, "build", "libs", `${appName}.war`);
-    if (!fs.existsSync(warFile)) {
+    // -PfinalName only applies when the build script reads it
+    const warFile = await this.pickWarFile(
+      path.join(projectDir, "build", "libs"),
+      [appName],
+    );
+    if (!warFile) {
       throw new Error("No WAR file found after Gradle build.");
     }
 
@@ -3328,45 +3410,6 @@ export class Builder {
     }
 
     return null;
-  }
-
-  /**
-   * Directory Copy Utility
-   *
-   * Implements recursive directory copy with:
-   * - Recursive structure preservation
-   * - File type handling
-   * - Atomic operations
-   * - Error-tolerant implementation
-   *
-   * @param src Source directory path
-   * @param dest Target directory path
-   * @throws Error if directory copy fails
-   */
-  private async copyDirectory(src: string, dest: string): Promise<void> {
-    await fsp.mkdir(dest, { recursive: true });
-    const entries = await fsp.readdir(src, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
-
-      try {
-        await fsp.rm(destPath, { force: true, recursive: true });
-      } catch (e) {
-        this.smartLog.debug(`Failed to remove ${destPath}: ${e}`);
-      }
-
-      if (entry.isDirectory()) {
-        await this.copyDirectory(srcPath, destPath);
-      } else {
-        try {
-          await fsp.copyFile(srcPath, destPath);
-        } catch (e) {
-          this.smartLog.warn(`Failed to copy ${srcPath} → ${destPath}: ${e}`);
-        }
-      }
-    }
   }
 
   /**

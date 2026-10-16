@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-10-17
+
+### Added
+- **`turbocat.mavenSkipTests`**: pass `-DskipTests` to `mvn clean package` during Maven deployments (default `false`).
+
+### Fixed
+- **Maven deployment deploys one artifact**: the exploded `target/<finalName>` directory is deployed when present, otherwise the WAR; previously both were copied, so Tomcat could unpack the WAR over the directory. The exploded directory is mirrored incrementally instead of deleted and recopied.
+- **Choosing the WAR**: Maven and Gradle prefer the WAR matching `finalName` / the webapp name, otherwise the newest WAR, ignoring Spring Boot's `-plain` variant.
+- **Gradle Kotlin DSL and wrapper**: projects with only `build.gradle.kts` can deploy with Gradle; the project's `gradlew` is used when present, otherwise `gradle` from PATH.
+- **Gradle deployments not reloading Tomcat**: a deployment that produces only a WAR now counts as successful and reloads Tomcat.
+- **Silent deployment aborts**: a missing Tomcat home, webapp name, webapps directory or JDK (Local) now reports why the deployment stopped, as does a pipeline that deployed nothing.
+
 ## [1.7.5] - 2026-10-16
 
 ### Changed

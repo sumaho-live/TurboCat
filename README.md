@@ -40,6 +40,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 | `turbocat.showSmartDeployLog` | Toggle smart deploy info/debug logs | Defaults to true; set false to suppress automatic sync chatter |
 | `turbocat.logEncoding` | Tomcat log decoding | Accepts any iconv-lite encoding name, such as `shift_jis` or `gb18030` |
 | `turbocat.preferredBuildType` | Forced build pipeline | Auto by default; set to Local/Maven/Gradle to skip prompts |
+| `turbocat.mavenSkipTests` | Skip tests in Maven deployments | Default `false`; when `true`, runs `mvn clean package -DskipTests` |
 | `turbocat.deployPath` | Override Tomcat webapp directory name | Relative to `webapps/`; leave empty to use the workspace folder name |
 | `turbocat.tomcatBase` | Project `CATALINA_BASE` | Defaults to `.vscode/turbocat`; set to an empty string to use `CATALINA_HOME` directly |
 | `turbocat.tomcatEnvironment` | Environment variables for standard starts | JSON object of key/value pairs applied to normal `TurboCat: Start` runs |

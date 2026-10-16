@@ -2,7 +2,7 @@
   "name": "turbocat",
   "displayName": "TurboCat",
   "description": "Automated Tomcat deployment with project-local configuration isolation and smart file synchronization for Java web projects",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "publisher": "Awei-Sumaho",
   "author": {
     "email": "awei@sumaho.live",
@@ -297,6 +297,12 @@
           "default": "",
           "scope": "resource",
           "description": "Path to the Maven installation. When set, uses \"<mavenHome>/bin/mvn\" instead of relying on the system PATH. Useful when mvn is not globally available."
+        },
+        "turbocat.mavenSkipTests": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Pass -DskipTests to \"mvn clean package\" during Maven deployments so tests are compiled but not run."
         },
         "turbocat.tomcatEnvironment": {
           "type": "object",

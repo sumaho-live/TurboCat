@@ -416,6 +416,36 @@ describe('Builder Tests', () => {
     });
   });
 
+  describe('pickWarFile()', () => {
+    const pick = (dir: string, preferred: Array<string | undefined>) =>
+      (builder as unknown as {
+        pickWarFile(directory: string, preferredBaseNames: Array<string | undefined>): Promise<string | undefined>;
+      }).pickWarFile(dir, preferred);
+
+    it('prefers the configured base name', async () => {
+      fs.writeFileSync(path.join(workspaceRoot, 'app.war'), 'a');
+      fs.writeFileSync(path.join(workspaceRoot, 'other.war'), 'b');
+
+      assert.strictEqual(await pick(workspaceRoot, ['app']), path.join(workspaceRoot, 'app.war'));
+    });
+
+    it('falls back to the newest WAR and ignores the -plain variant', async () => {
+      const older = path.join(workspaceRoot, 'old.war');
+      const newer = path.join(workspaceRoot, 'new.war');
+      const plain = path.join(workspaceRoot, 'new-plain.war');
+      [older, newer, plain].forEach((file) => fs.writeFileSync(file, 'x'));
+      fs.utimesSync(older, new Date(1000), new Date(1000));
+      fs.utimesSync(newer, new Date(2000), new Date(2000));
+      fs.utimesSync(plain, new Date(3000), new Date(3000));
+
+      assert.strictEqual(await pick(workspaceRoot, ['${project.artifactId}']), newer);
+    });
+
+    it('returns undefined when no WAR exists', async () => {
+      assert.strictEqual(await pick(path.join(workspaceRoot, 'missing'), []), undefined);
+    });
+  });
+
   describe('executeCommandSpawn() paths with spaces', () => {
     it('passes command and args array directly to spawn (not a space-joined string)', async () => {
       const builderPriv = builder as unknown as {
