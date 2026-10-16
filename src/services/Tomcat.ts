@@ -12,7 +12,7 @@ import { promisify } from "util";
 import { Logger } from "./Logger";
 import { ChildProcess, spawn } from "child_process";
 import * as net from "net";
-import iconv from "iconv-lite";
+import type { DecoderStream } from "iconv-lite";
 import { normalizeDeploymentPath } from "../utils/deploymentPath";
 import { TomcatBase } from "./TomcatBase";
 import { ProcessOwnership } from "./ProcessOwnership";
@@ -1166,7 +1166,6 @@ export class Tomcat {
       options?.catalinaBase ?? (await this.getCatalinaBase(tomcatHome));
 
     if (action === "start") {
-      const logEncoding = this.logger.getLogEncoding();
       const { command, args } = this.buildCommand(
         action,
         tomcatHome,
@@ -1207,34 +1206,37 @@ export class Tomcat {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
-      const resolvedEncoding = iconv.encodingExists(logEncoding)
-        ? logEncoding
-        : "utf8";
+      // One stateful decoder per stream: a multi-byte character split across
+      // two chunks must not be decoded half by half.
+      const stdoutDecoder = this.logger.createLogDecoder();
+      const stderrDecoder = this.logger.createLogDecoder();
+      this.logger.resetOutputReveal();
 
-      const decode = (data: Buffer | string): string => {
+      const decode = (decoder: DecoderStream, data: Buffer | string): string => {
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
         try {
-          return iconv.decode(buffer, resolvedEncoding);
+          return decoder.write(buffer);
         } catch {
           return buffer.toString("utf8");
         }
       };
 
       child.stdout.on("data", (data) => {
-        stdoutBuffer += decode(data);
+        stdoutBuffer += decode(stdoutDecoder, data);
         const lines = stdoutBuffer.split(/\r?\n/);
         stdoutBuffer = lines.pop() || "";
         lines.forEach((line) => this.logger.appendRawLine(line));
       });
 
       child.stderr.on("data", (data) => {
-        stderrBuffer += decode(data);
+        stderrBuffer += decode(stderrDecoder, data);
         const lines = stderrBuffer.split(/\r?\n/);
         stderrBuffer = lines.pop() || "";
         lines.forEach((line) => this.logger.appendRawLine(line));
       });
 
       child.stdout.on("end", () => {
+        stdoutBuffer += stdoutDecoder.end() ?? "";
         if (stdoutBuffer.trim()) {
           this.logger.appendRawLine(stdoutBuffer);
         }
@@ -1242,6 +1244,7 @@ export class Tomcat {
       });
 
       child.stderr.on("end", () => {
+        stderrBuffer += stderrDecoder.end() ?? "";
         if (stderrBuffer.trim()) {
           this.logger.appendRawLine(stderrBuffer);
         }

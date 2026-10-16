@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-10-16
+
+### Fixed
+- **`showSmartDeployLog` ignored**: turning the setting off now hides smart deploy info/debug messages; warnings and errors are still shown.
+- **Garbled multi-byte log text**: Tomcat console output and access logs are decoded with a stateful decoder per stream, so Chinese/Japanese characters split across two chunks (GBK, Shift_JIS, UTF-8, …) no longer turn into `�`.
+- **Out-of-order access log lines**: reads triggered by rapid file-change events are queued per file, so appended chunks are always processed in order.
+- **Output panel revealed on every line**: with `autoShowOutput`, Tomcat output reveals the panel once per run instead of on every line; warnings and errors still reveal it.
+
 ## [1.7.3] - 2026-10-15
 
 ### Fixed

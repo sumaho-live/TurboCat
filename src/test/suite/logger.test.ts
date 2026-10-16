@@ -1,6 +1,10 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as sinon from 'sinon';
+import fsp from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import iconv from 'iconv-lite';
 import { Logger } from '../../services/Logger';
 
 describe('Logger Tests', () => {
@@ -43,5 +47,57 @@ describe('Logger Tests', () => {
     logger.appendRawLine('GET /health 200');
 
     assert.deepStrictEqual(lines, ['GET /health 200']);
+  });
+
+  it('hides smart deploy chatter but keeps warnings when showSmartDeployLog is off', () => {
+    (logger as unknown as { showSmartDeployLog: boolean }).showSmartDeployLog = false;
+
+    logger.info('copied', false, 'smartDeploy');
+    logger.warn('copy failed', false, 'smartDeploy');
+    logger.info('general');
+
+    assert.strictEqual(lines.length, 2);
+    assert.match(lines[0], /\[WARN\] copy failed$/);
+    assert.match(lines[1], /\[INFO\] general$/);
+  });
+
+  it('reveals the output panel once per run for Tomcat output', () => {
+    const shown = sandbox.spy();
+    (logger as unknown as { outputChannel: { show: () => void } }).outputChannel.show = shown;
+
+    logger.appendRawLine('line 1');
+    logger.appendRawLine('line 2');
+    assert.strictEqual(shown.callCount, 1);
+
+    logger.resetOutputReveal();
+    logger.appendRawLine('line 3');
+    assert.strictEqual(shown.callCount, 2);
+  });
+
+  it('decodes multi-byte characters split across log chunks', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'turbocat-logger-'));
+    const logPath = path.join(dir, 'localhost_access_log.2026-01-01.log');
+    const internals = logger as unknown as {
+      logEncoding: string;
+      accessLogOffsets: Map<string, number>;
+      handleLiveLogUpdate: (file: string) => Promise<void>;
+    };
+    try {
+      internals.logEncoding = 'gbk';
+      await fsp.writeFile(logPath, '');
+      internals.accessLogOffsets.set(logPath, 0);
+
+      const bytes = iconv.encode('访问日志\n', 'gbk');
+      await fsp.appendFile(logPath, bytes.subarray(0, 3));
+      const first = internals.handleLiveLogUpdate(logPath);
+      await fsp.appendFile(logPath, bytes.subarray(3));
+      // Queued behind the first read even though it is not awaited yet
+      const second = internals.handleLiveLogUpdate(logPath);
+      await Promise.all([first, second]);
+
+      assert.deepStrictEqual(lines, ['访问日志']);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 });

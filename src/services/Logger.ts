@@ -6,7 +6,8 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
-import iconv from "iconv-lite";
+import fsp from "fs/promises";
+import iconv, { DecoderStream } from "iconv-lite";
 import { getWorkspaceConfiguration } from "../core/workspace";
 import { getActiveWorkspaceFolder } from "../core/workspace";
 //import { Builder } from './Builder';
@@ -31,6 +32,12 @@ export class Logger {
   private invalidEncodingWarned = false;
   private accessLogOffsets: Map<string, number> = new Map();
   private partialLines: Map<string, string> = new Map();
+  // Stateful decoders keep multi-byte characters split across reads intact
+  private logDecoders: Map<string, DecoderStream> = new Map();
+  // Serializes reads per file so appended chunks are processed in order
+  private tailQueues: Map<string, Promise<void>> = new Map();
+  // Tomcat output reveals the panel once per run instead of on every line
+  private appOutputShown = false;
   private logLevels: { [key: string]: number } = {
     DEBUG: 0,
     INFO: 1,
@@ -149,6 +156,7 @@ export class Logger {
     if (previousEncoding !== this.logEncoding) {
       this.invalidEncodingWarned = false;
       this.partialLines.clear();
+      this.logDecoders.clear();
       this.accessLogOffsets.clear();
     }
     this.autoShowOutput = config.get<boolean>("autoShowOutput", true);
@@ -170,6 +178,8 @@ export class Logger {
     this.accessLogWatcher?.close();
     this.accessLogWatcher = undefined;
     this.partialLines.clear();
+    this.logDecoders.clear();
+    this.tailQueues.clear();
     this.accessLogOffsets.clear();
   }
 
@@ -290,6 +300,14 @@ export class Logger {
    */
   public clearOutput(): void {
     this.outputChannel.clear();
+    this.resetOutputReveal();
+  }
+
+  /**
+   * Let the next Tomcat output line reveal the output panel again
+   */
+  public resetOutputReveal(): void {
+    this.appOutputShown = false;
   }
 
   /**
@@ -339,10 +357,11 @@ export class Logger {
   private setupRealtimeAccessLog(logPath: string) {
     this.accessLogWatcher = fs.watch(logPath, (eventType) => {
       if (eventType === "change") {
-        this.handleLiveLogUpdate(logPath);
+        void this.handleLiveLogUpdate(logPath);
       }
     });
 
+    this.logDecoders.delete(logPath);
     try {
       const size = fs.statSync(logPath).size;
       this.accessLogOffsets.set(logPath, size);
@@ -353,23 +372,73 @@ export class Logger {
     }
   }
 
-  /** Handle live log file updates */
-  private handleLiveLogUpdate(logPath: string) {
-    try {
-      const newSize = fs.statSync(logPath).size;
-      const oldSize = this.accessLogOffsets.get(logPath) ?? 0;
+  /**
+   * Handle live log file updates. fs.watch fires several events per write;
+   * reads are queued per file so chunks are never processed out of order.
+   */
+  private handleLiveLogUpdate(logPath: string): Promise<void> {
+    const previous = this.tailQueues.get(logPath) ?? Promise.resolve();
+    const next: Promise<void> = previous
+      .then(() => this.readLogUpdates(logPath))
+      .catch((error) => {
+        this.warn(
+          `Failed to read log updates from ${logPath}: ${(error as Error).message}`,
+        );
+      })
+      .finally(() => {
+        if (this.tailQueues.get(logPath) === next) {
+          this.tailQueues.delete(logPath);
+        }
+      });
+    this.tailQueues.set(logPath, next);
+    return next;
+  }
 
-      if (newSize > oldSize) {
-        this.tailFile(logPath, oldSize, newSize);
-        this.accessLogOffsets.set(logPath, newSize);
-      } else if (newSize < oldSize) {
-        // File was truncated (rotation) – reset cursors
-        this.accessLogOffsets.set(logPath, newSize);
-        this.partialLines.set(logPath, "");
-      }
+  private async readLogUpdates(logPath: string): Promise<void> {
+    const oldSize = this.accessLogOffsets.get(logPath);
+    if (oldSize === undefined) {
+      // No longer tracked (watcher released or re-attached)
+      return;
+    }
+
+    let newSize: number;
+    try {
+      newSize = (await fsp.stat(logPath)).size;
     } catch {
       this.accessLogOffsets.delete(logPath);
       this.partialLines.delete(logPath);
+      this.logDecoders.delete(logPath);
+      return;
+    }
+
+    if (newSize > oldSize) {
+      const buffer = await this.readRange(logPath, oldSize, newSize);
+      if (this.accessLogOffsets.get(logPath) !== oldSize) {
+        // Cursor was reset (released or re-attached) while reading
+        return;
+      }
+      this.accessLogOffsets.set(logPath, oldSize + buffer.length);
+      this.processLogBuffer(logPath, buffer);
+    } else if (newSize < oldSize) {
+      // File was truncated (rotation) – reset cursors
+      this.accessLogOffsets.set(logPath, newSize);
+      this.partialLines.set(logPath, "");
+      this.logDecoders.delete(logPath);
+    }
+  }
+
+  private async readRange(
+    filePath: string,
+    start: number,
+    end: number,
+  ): Promise<Buffer> {
+    const handle = await fsp.open(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(end - start);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
     }
   }
 
@@ -378,70 +447,50 @@ export class Logger {
     this.appendRawLine(rawLine);
   }
 
-  private tailFile(filePath: string, start: number, end: number): void {
-    if (end <= start) {
-      return;
-    }
-
-    const stream = fs.createReadStream(filePath, {
-      start,
-      end: end - 1,
-    });
-
-    const buffers: Buffer[] = [];
-    stream.on("data", (chunk) => {
-      if (Buffer.isBuffer(chunk)) {
-        buffers.push(chunk);
-      } else {
-        buffers.push(Buffer.from(chunk));
-      }
-    });
-
-    stream.on("end", () => {
-      if (!buffers.length) {
-        return;
-      }
-      this.processLogBuffer(filePath, Buffer.concat(buffers));
-    });
-
-    stream.on("error", (error) => {
-      this.warn(
-        `Failed to read log updates from ${filePath}: ${(error as Error).message}`,
-      );
-    });
-  }
-
   private processLogBuffer(filePath: string, buffer: Buffer): void {
-    const decoded = this.decodeBuffer(buffer);
+    const decoded = this.decodeBuffer(filePath, buffer);
     this.processDecodedLines(filePath, decoded);
   }
 
-  private decodeBuffer(buffer: Buffer): string {
-    const encoding = this.logEncoding;
-    try {
-      if (iconv.encodingExists(encoding)) {
-        this.invalidEncodingWarned = false;
-        return iconv.decode(buffer, encoding);
-      }
-
-      if (!this.invalidEncodingWarned) {
-        this.warn(
-          `Encoding '${encoding}' is not recognized. Falling back to UTF-8.`,
-          false,
-        );
-        this.invalidEncodingWarned = true;
-      }
-    } catch (error) {
-      if (!this.invalidEncodingWarned) {
-        this.warn(
-          `Failed to decode log chunk with encoding '${encoding}'. Falling back to UTF-8.`,
-          false,
-        );
-        this.invalidEncodingWarned = true;
-      }
+  private decodeBuffer(filePath: string, buffer: Buffer): string {
+    let decoder = this.logDecoders.get(filePath);
+    if (!decoder) {
+      decoder = this.createLogDecoder();
+      this.logDecoders.set(filePath, decoder);
     }
+    try {
+      return decoder.write(buffer);
+    } catch {
+      this.logDecoders.delete(filePath);
+      if (!this.invalidEncodingWarned) {
+        this.warn(
+          `Failed to decode log chunk with encoding '${this.logEncoding}'. Falling back to UTF-8.`,
+          false,
+        );
+        this.invalidEncodingWarned = true;
+      }
+      return buffer.toString("utf8");
+    }
+  }
 
-    return buffer.toString("utf8");
+  /**
+   * Create a stateful decoder for the configured log encoding. Unlike
+   * iconv.decode, it carries incomplete multi-byte sequences over to the
+   * next chunk instead of turning them into replacement characters.
+   */
+  public createLogDecoder(): DecoderStream {
+    const encoding = this.logEncoding;
+    if (iconv.encodingExists(encoding)) {
+      return iconv.getDecoder(encoding);
+    }
+    if (!this.invalidEncodingWarned) {
+      this.warn(
+        `Encoding '${encoding}' is not recognized. Falling back to UTF-8.`,
+        false,
+      );
+      this.invalidEncodingWarned = true;
+    }
+    return iconv.getDecoder("utf8");
   }
 
   private processDecodedLines(filePath: string, decoded: string): void {
@@ -490,12 +539,14 @@ export class Logger {
       return;
     }
 
-    if (!isTomcatLog && !this.showSmartDeployLog && context === "smartDeploy") {
-      // When smart deploy logs are hidden, respect the user's logLevel
-      // instead of hardcoding INFO, so logLevel=DEBUG still shows debug chatter.
-      if (messageLevelValue < threshold) {
-        return;
-      }
+    if (
+      !isTomcatLog &&
+      !this.showSmartDeployLog &&
+      context === "smartDeploy" &&
+      messageLevelValue < this.logLevels.WARN
+    ) {
+      // Hidden smart deploy chatter still surfaces warnings and errors
+      return;
     }
 
     let formattedMessage: string;
@@ -528,11 +579,17 @@ export class Logger {
     }
 
     // Only show the output channel automatically if configured to do so
-    if (
-      this.autoShowOutput &&
-      ["ERROR", "WARN", "APP"].includes(messageLevel)
-    ) {
-      this.outputChannel.show(true);
+    // Tomcat output reveals the panel once per run; revealing on every line
+    // floods the UI during start-up and keeps re-showing a panel the user closed.
+    if (this.autoShowOutput) {
+      if (messageLevel === "APP") {
+        if (!this.appOutputShown) {
+          this.appOutputShown = true;
+          this.outputChannel.show(true);
+        }
+      } else if (messageLevel === "ERROR" || messageLevel === "WARN") {
+        this.outputChannel.show(true);
+      }
     }
   }
 
