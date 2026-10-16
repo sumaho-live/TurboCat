@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-10-16
+
+### Changed
+- **Faster full deployments**: web resources, compiled classes and libraries are only copied when size or modification time differ, and the source modification time is kept on the deployed copy; copies run in parallel. Multiple Eclipse/WTP resource roots are merged in memory instead of through a temporary staging directory.
+- **Local deployment skips unchanged javac**: when no Java source or classpath jar changed since the last Local build in this session, `WEB-INF/classes` is kept and compilation is skipped. Any change still triggers a full clean compile.
+- **Smart deploy batches**: compiled classes in one batch are copied in parallel, and the Tomcat webapps location is resolved once instead of for every copied file.
+- **Quieter output panel**: "Smart deploy PAUSED/RESUMED" during manual deployments is logged as info and no longer pops up the output panel.
+
+### Fixed
+- **Access log rotation**: after Tomcat starts a new access log, its first lines are shown instead of skipped; deleting old access logs no longer resets the live view.
+
 ## [1.7.4] - 2026-10-16
 
 ### Fixed

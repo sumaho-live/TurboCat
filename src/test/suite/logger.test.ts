@@ -100,4 +100,31 @@ describe('Logger Tests', () => {
       await fsp.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('reads a rotated access log from its first line and keeps the cursor on re-attach', async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'turbocat-logger-'));
+    const logPath = path.join(base, 'logs', 'localhost_access_log.2026-01-02.log');
+    const internals = logger as unknown as {
+      watchAccessLogDirectly: (home: string, fromStart?: boolean) => Promise<void>;
+      tailQueues: Map<string, Promise<void>>;
+      accessLogOffsets: Map<string, number>;
+    };
+    try {
+      await fsp.mkdir(path.dirname(logPath));
+      await fsp.writeFile(logPath, 'GET /first 200\n');
+
+      await internals.watchAccessLogDirectly(base, true);
+      await internals.tailQueues.get(logPath);
+      assert.deepStrictEqual(lines, ['GET /first 200']);
+
+      // A later rename event for the same file must not rewind or skip
+      await internals.watchAccessLogDirectly(base, true);
+      await internals.tailQueues.get(logPath);
+      assert.deepStrictEqual(lines, ['GET /first 200']);
+      assert.strictEqual(internals.accessLogOffsets.get(logPath), 15);
+    } finally {
+      logger.releaseRuntime();
+      await fsp.rm(base, { recursive: true, force: true });
+    }
+  });
 });

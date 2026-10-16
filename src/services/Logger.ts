@@ -23,6 +23,7 @@ export class Logger {
   private outputChannel: vscode.OutputChannel;
 
   private accessLogWatcher?: fs.FSWatcher;
+  private watchedAccessLog?: string;
   private unifiedLogWatcher?: fs.FSWatcher; // Single watcher for log directory monitoring
   private logLevel: string;
   private showTimestamp: boolean;
@@ -177,6 +178,7 @@ export class Logger {
     }
     this.accessLogWatcher?.close();
     this.accessLogWatcher = undefined;
+    this.watchedAccessLog = undefined;
     this.partialLines.clear();
     this.logDecoders.clear();
     this.tailQueues.clear();
@@ -324,48 +326,70 @@ export class Logger {
   }
 
   /**
-   * Monitor access logs directly for real-time updates
+   * Monitor access logs directly for real-time updates.
+   * `fromStart` is used after rotation: the new file's first lines are new
+   * output, whereas on start-up existing content is history and skipped.
    */
-  private async watchAccessLogDirectly(tomcatHome: string) {
+  private async watchAccessLogDirectly(tomcatHome: string, fromStart = false) {
     const logsDir = path.join(tomcatHome, "logs");
     const accessLogPattern = /localhost_access_log\.\d{4}-\d{2}-\d{2}\.log/;
 
-    this.accessLogWatcher?.close();
-    this.accessLogWatcher = undefined;
-
-    let files: string[];
+    let files: string[] = [];
     try {
       files = await fs.promises.readdir(logsDir);
     } catch {
+      // Logs directory missing: stop watching below
+    }
+
+    const latest = files
+      .filter((f) => accessLogPattern.test(f))
+      .sort()
+      .pop();
+    const logPath = latest ? path.join(logsDir, latest) : undefined;
+
+    // Rename events also fire when old logs are deleted; keep the cursor
+    // of a file that is already being watched.
+    if (logPath && this.accessLogWatcher && this.watchedAccessLog === logPath) {
       return;
     }
 
-    const accessLogs = files
-      .filter((f) => accessLogPattern.test(f))
-      .sort()
-      .reverse();
+    this.accessLogWatcher?.close();
+    this.accessLogWatcher = undefined;
+    if (this.watchedAccessLog) {
+      this.accessLogOffsets.delete(this.watchedAccessLog);
+    }
+    this.watchedAccessLog = undefined;
 
-    if (accessLogs.length > 0) {
-      const logPath = path.join(logsDir, accessLogs[0]);
-      this.setupRealtimeAccessLog(logPath);
+    if (logPath) {
+      this.setupRealtimeAccessLog(logPath, fromStart);
     }
   }
 
   /**
    * Setup real-time access log monitoring
    */
-  private setupRealtimeAccessLog(logPath: string) {
-    this.accessLogWatcher = fs.watch(logPath, (eventType) => {
-      if (eventType === "change") {
-        void this.handleLiveLogUpdate(logPath);
-      }
-    });
+  private setupRealtimeAccessLog(logPath: string, fromStart = false) {
+    try {
+      this.accessLogWatcher = fs.watch(logPath, (eventType) => {
+        if (eventType === "change") {
+          void this.handleLiveLogUpdate(logPath);
+        }
+      });
+    } catch {
+      return;
+    }
+    this.watchedAccessLog = logPath;
 
     this.logDecoders.delete(logPath);
+    this.partialLines.set(logPath, "");
+    if (fromStart) {
+      this.accessLogOffsets.set(logPath, 0);
+      // Lines written before the watcher was attached raise no event
+      void this.handleLiveLogUpdate(logPath);
+      return;
+    }
     try {
-      const size = fs.statSync(logPath).size;
-      this.accessLogOffsets.set(logPath, size);
-      this.partialLines.set(logPath, "");
+      this.accessLogOffsets.set(logPath, fs.statSync(logPath).size);
     } catch {
       this.accessLogOffsets.delete(logPath);
       this.partialLines.delete(logPath);
@@ -610,7 +634,10 @@ export class Logger {
           eventType === "rename"
         ) {
           // New log file detected (rotation) - re-attach real-time watcher
-          this.watchAccessLogDirectly(this.runtimeBase || this.tomcatHome);
+          void this.watchAccessLogDirectly(
+            this.runtimeBase || this.tomcatHome,
+            true,
+          );
         }
       });
     } catch {

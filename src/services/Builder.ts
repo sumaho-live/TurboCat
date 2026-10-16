@@ -8,6 +8,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as os from "os";
+import * as crypto from "crypto";
 import { env } from "vscode";
 import { glob } from "glob";
 import { Tomcat } from "./Tomcat";
@@ -21,7 +22,11 @@ import { ProjectDetector } from "./project/ProjectDetector";
 import { globToRegex } from "./project/GlobPattern";
 import { EclipseMetadataParser } from "./project/EclipseMetadataParser";
 import { CommandRunner } from "./build/CommandRunner";
-import { DirectorySynchronizer } from "./deployment/DirectorySynchronizer";
+import {
+  COPY_CONCURRENCY,
+  DirectorySynchronizer,
+  runWithConcurrency,
+} from "./deployment/DirectorySynchronizer";
 import { JavaReadiness } from "./JavaReadiness";
 import {
   KeyedDebouncer,
@@ -648,6 +653,11 @@ export class Builder {
   private static readonly EDITOR_SAVE_WINDOW_MS = 30000;
   // Source fingerprint (mtime:size) of the last smart-deployed copy, keyed by target path
   private readonly deployedFingerprints = new Map<string, string>();
+  // Resolving the webapps root validates Tomcat home and the workspace base;
+  // smart deploy needs it for every copied file, so it is cached.
+  private webappsRootCache?: string;
+  // Source/classpath fingerprint of the last successful Local javac, per classes dir
+  private readonly compileStamps = new Map<string, string>();
   private static readonly STATIC_SETTLE_MS = 120;
   private static readonly RECENT_CLASS_WINDOW_MS = 10000;
   private static readonly RELOAD_SETTLE_MS = 1500;
@@ -729,6 +739,13 @@ export class Builder {
     return Tomcat.getInstance(this.workspaceFolder?.uri);
   }
 
+  private async getSmartWebappsRoot(): Promise<string> {
+    if (!this.webappsRootCache) {
+      this.webappsRootCache = await this.getTomcat().getWebappsRoot();
+    }
+    return this.webappsRootCache;
+  }
+
   private getLogger(): Logger {
     return Logger.getInstance(this.workspaceFolder?.uri);
   }
@@ -750,6 +767,7 @@ export class Builder {
    * Update configuration from workspace settings
    */
   public updateConfig(): void {
+    this.webappsRootCache = undefined;
     // Use smartDeploy setting
     this.autoDeployMode = this.getConfiguration().get(
       "smartDeploy",
@@ -1234,10 +1252,14 @@ export class Builder {
     const previousSmartDeploy = this.autoDeployMode;
     // A full deployment rewrites the webapp, so forget what smart deploy copied.
     this.deployedFingerprints.clear();
+    // Other pipelines rewrite WEB-INF/classes, so the next Local build recompiles
+    if (buildType !== "Local") {
+      this.compileStamps.clear();
+    }
     if (this.autoDeployMode === "Smart") {
       this.autoDeployMode = "Disable";
       this.disposeSmartDeploy();
-      this.smartLog.warn("Smart deploy PAUSED for manual deployment");
+      this.smartLog.info("Smart deploy PAUSED for manual deployment");
     }
 
     try {
@@ -1360,7 +1382,7 @@ export class Builder {
             err as string,
           ),
         );
-        this.smartLog.warn("Smart deploy RESUMED after manual deployment");
+        this.smartLog.info("Smart deploy RESUMED after manual deployment");
       }
     }
   }
@@ -1522,6 +1544,7 @@ export class Builder {
    */
   public async initializeSmartDeploy(): Promise<void> {
     const generation = ++this.smartDeployGeneration;
+    this.webappsRootCache = undefined;
     // Update autoDeployMode from config to ensure it's current
     this.autoDeployMode = this.getConfiguration().get(
       "smartDeploy",
@@ -1582,8 +1605,10 @@ export class Builder {
         true,
       );
       if (!showLog) {
-        this.smartLog.warn(
-          "Smart deploy log visibility is OFF (turbocat.showSmartDeployLog=false). Deployment confirmations will still appear, but debug details are hidden.",
+        // Logged as general info: smart deploy info is hidden by this setting,
+        // and a warning would pop the output panel on every initialization.
+        this.getLogger().info(
+          "Smart deploy log visibility is OFF (turbocat.showSmartDeployLog=false). Smart deploy warnings and errors still appear; info and debug details are hidden.",
         );
       }
     } catch (error) {
@@ -2193,7 +2218,7 @@ export class Builder {
       this.scheduleReloadIfNeeded(mapping, filePath);
 
       const fileName = path.basename(filePath);
-      const webappsRoot = await this.getTomcat().getWebappsRoot();
+      const webappsRoot = await this.getSmartWebappsRoot();
       const relativePath = webappsRoot
         ? path.relative(webappsRoot, targetPath)
         : path.basename(targetPath);
@@ -2273,19 +2298,23 @@ export class Builder {
     let successCount = 0;
     let errorCount = 0;
 
-    // Deploy all files in batch
-    for (const { filePath, eventType } of filesToDeploy) {
-      try {
-        await this.executeCompiledFileDeployment(filePath, eventType);
-        successCount++;
-      } catch (error) {
-        this.smartLog.error(
-          `Batch deploy failed for ${path.basename(filePath)}`,
-          error as string,
-        );
-        errorCount++;
-      }
-    }
+    // Paths in a batch are unique, so their copies can run in parallel
+    await runWithConcurrency(
+      filesToDeploy,
+      COPY_CONCURRENCY,
+      async ({ filePath, eventType }) => {
+        try {
+          await this.executeCompiledFileDeployment(filePath, eventType);
+          successCount++;
+        } catch (error) {
+          this.smartLog.error(
+            `Batch deploy failed for ${path.basename(filePath)}`,
+            error as string,
+          );
+          errorCount++;
+        }
+      },
+    );
 
     // Log batch results
     if (successCount > 0) {
@@ -2335,7 +2364,7 @@ export class Builder {
     this.scheduleReloadIfNeeded(mapping, filePath);
 
     const fileName = path.basename(filePath);
-    const webappsRoot = await this.getTomcat().getWebappsRoot();
+    const webappsRoot = await this.getSmartWebappsRoot();
     const relativePath = webappsRoot
       ? path.relative(webappsRoot, targetPath)
       : path.basename(targetPath);
@@ -2374,7 +2403,7 @@ export class Builder {
     await fsp.rm(targetPath, { force: true });
     this.deployedFingerprints.delete(targetPath);
     this.scheduleReloadIfNeeded(mapping, filePath);
-    const webappsRoot = await this.getTomcat().getWebappsRoot();
+    const webappsRoot = await this.getSmartWebappsRoot();
     const relativePath = webappsRoot
       ? path.relative(webappsRoot, targetPath)
       : path.basename(targetPath);
@@ -2527,6 +2556,7 @@ export class Builder {
    */
   public disposeSmartDeploy(): void {
     this.smartDeployGeneration++;
+    this.webappsRootCache = undefined;
     this.disposeFileWatchers();
 
     // Clear batch deployment timer and pending files
@@ -2663,9 +2693,12 @@ export class Builder {
       onCleanupError: (message) => this.smartLog.debug(message),
     });
 
-    report("Refreshing compiled output...", 10);
-    await fsp.rm(classesDir, { force: true, recursive: true });
-    await fsp.mkdir(classesDir, { recursive: true });
+    const refreshClassesDir = async () => {
+      this.compileStamps.delete(classesDir);
+      report("Refreshing compiled output...", 10);
+      await fsp.rm(classesDir, { force: true, recursive: true });
+      await fsp.mkdir(classesDir, { recursive: true });
+    };
 
     const javaSourceRoots =
       structure.javaSourceRoots && structure.javaSourceRoots.length > 0
@@ -2683,7 +2716,6 @@ export class Builder {
     }
 
     if (javaFiles.size > 0) {
-      report("Compiling Java sources...", 35);
       const classpathEntries = new Set<string>();
       const addClasspathDir = (dir: string) => {
         try {
@@ -2723,26 +2755,40 @@ export class Builder {
       const classpath = Array.from(classpathEntries).join(path.delimiter);
       const compileTargets = Array.from(javaFiles);
 
-      const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "turbocat-javac-"));
-      const argsFile = path.join(tempDir, "sources.args");
-      const argsFileContent = compileTargets
-        .map((filePath) => `"${filePath.replace(/"/g, '\\"')}"`)
-        .join(os.EOL);
-
-      await fsp.writeFile(argsFile, argsFileContent, "utf8");
-
-      const javacArgs: string[] = [];
-      if (this.compileEncoding) {
-        javacArgs.push("-encoding", this.compileEncoding);
-      }
-      javacArgs.push("-d", classesDir, "-cp", classpath, `@${argsFile}`);
-
-      try {
-        await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
-      } finally {
-        await fsp.rm(tempDir, { recursive: true, force: true });
+      // A web root that ships its own WEB-INF/classes is mirrored into the
+      // target above and may have pruned earlier javac output; always rebuild then.
+      const fingerprint = fs.existsSync(path.join(webAppPath, "WEB-INF", "classes"))
+        ? undefined
+        : await this.computeCompileFingerprint(
+            javacPath,
+            compileTargets,
+            classpathEntries,
+          );
+      if (
+        fingerprint &&
+        this.compileStamps.get(classesDir) === fingerprint &&
+        (await fsp.readdir(classesDir).catch(() => [])).length > 0
+      ) {
+        report("Java sources unchanged, skipping compilation", 45);
+        this.getLogger().info(
+          "Java sources and classpath unchanged since the last Local build; skipping javac",
+        );
+      } else {
+        await refreshClassesDir();
+        report("Compiling Java sources...", 35);
+        await this.compileJavaSources(
+          projectDir,
+          javacPath,
+          classesDir,
+          classpath,
+          compileTargets,
+        );
+        if (fingerprint) {
+          this.compileStamps.set(classesDir, fingerprint);
+        }
       }
     } else {
+      await refreshClassesDir();
       report("No Java sources detected, skipping compilation", 35);
     }
 
@@ -2765,6 +2811,81 @@ export class Builder {
       path.join(targetDir, "META-INF"),
       path.basename(targetDir),
     );
+  }
+
+  private async compileJavaSources(
+    projectDir: string,
+    javacPath: string,
+    classesDir: string,
+    classpath: string,
+    compileTargets: string[],
+  ): Promise<void> {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "turbocat-javac-"));
+    const argsFile = path.join(tempDir, "sources.args");
+    const argsFileContent = compileTargets
+      .map((filePath) => `"${filePath.replace(/"/g, '\\"')}"`)
+      .join(os.EOL);
+
+    await fsp.writeFile(argsFile, argsFileContent, "utf8");
+
+    const javacArgs: string[] = [];
+    if (this.compileEncoding) {
+      javacArgs.push("-encoding", this.compileEncoding);
+    }
+    javacArgs.push("-d", classesDir, "-cp", classpath, `@${argsFile}`);
+
+    try {
+      await this.executeCommandSpawn(javacPath, javacArgs, projectDir);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Fingerprint of everything a Local javac run reads: compiler, encoding,
+   * source files and classpath jars (path, size, mtime). Returns undefined
+   * when the classpath has class folders, whose contents are not tracked.
+   */
+  private async computeCompileFingerprint(
+    javacPath: string,
+    sourceFiles: string[],
+    classpathEntries: Iterable<string>,
+  ): Promise<string | undefined> {
+    const files = [...sourceFiles];
+    const entries = [...classpathEntries];
+    for (const entry of entries) {
+      if (path.basename(entry) === "*") {
+        const dir = path.dirname(entry);
+        const names = await fsp.readdir(dir).catch(() => [] as string[]);
+        names
+          .filter((name) => name.toLowerCase().endsWith(".jar"))
+          .forEach((name) => files.push(path.join(dir, name)));
+      } else {
+        files.push(entry);
+      }
+    }
+    files.sort();
+
+    const stamps = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const stats = await fsp.stat(file);
+          return stats.isDirectory()
+            ? undefined
+            : `${file}:${stats.size}:${stats.mtimeMs}`;
+        } catch {
+          return `${file}:missing`;
+        }
+      }),
+    );
+    if (stamps.includes(undefined)) {
+      return undefined;
+    }
+
+    const hash = crypto.createHash("sha1");
+    hash.update([javacPath, this.compileEncoding ?? "", ...entries].join("\0"));
+    stamps.forEach((stamp) => hash.update(`\0${stamp}`));
+    return hash.digest("hex");
   }
 
   /**
@@ -3748,7 +3869,7 @@ export class Builder {
 
     let webappDir = options.webappDir;
     if (!webappDir) {
-      const webappsRoot = await this.getTomcat().getWebappsRoot();
+      const webappsRoot = await this.getSmartWebappsRoot();
       if (!webappsRoot) {
         return "";
       }
