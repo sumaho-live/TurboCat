@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
+import * as net from 'net';
 import * as vscode from 'vscode';
 import { Tomcat } from '../../services/Tomcat';
 import { Logger } from '../../services/Logger';
@@ -135,6 +136,84 @@ describe('Tomcat Tests', () => {
     assert.match(updated, /<Server port="9005"/);
     assert.match(updated, /<Connector port="8009" protocol="AJP\/1\.3"/);
     assert.match(updated, /<Connector port="9090" protocol="HTTP\/1\.1"/);
+  });
+
+  describe('startup port checks', () => {
+    type Internals = {
+      port: number;
+      shutdownPort: number;
+      tomcatProcess: unknown;
+      isPortListening(port: number): Promise<boolean>;
+      isPortInUse(port: number): Promise<boolean>;
+      waitForStartup(timeoutMs?: number): Promise<boolean>;
+      resolveDebugPort(): Promise<number | undefined>;
+      getConfiguration(): unknown;
+    };
+    const internals = () => tomcat as unknown as Internals;
+
+    const listenOnFreePort = async (): Promise<net.Server> => {
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      return server;
+    };
+
+    it('detects a port bound by another process even when netstat finds nothing', async () => {
+      sandbox.stub(internals(), 'isPortListening').resolves(false);
+      const server = await listenOnFreePort();
+      try {
+        const port = (server.address() as net.AddressInfo).port;
+        assert.strictEqual(await internals().isPortInUse(port), true);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
+
+    it('fails startup as soon as the Tomcat process exits', async () => {
+      sandbox.stub(internals(), 'isPortListening').resolves(false);
+      internals().tomcatProcess = { exitCode: 2, signalCode: null };
+
+      const started = Date.now();
+      assert.strictEqual(await internals().waitForStartup(5000), false);
+      assert.ok(Date.now() - started < 1000);
+    });
+
+    it('does not treat a live process without listening ports as started', async () => {
+      sandbox.stub(internals(), 'isPortListening').resolves(false);
+      internals().tomcatProcess = { exitCode: null, signalCode: null };
+
+      assert.strictEqual(await internals().waitForStartup(600), false);
+    });
+
+    it('reports started once the HTTP port listens', async () => {
+      internals().port = 18080;
+      sandbox.stub(internals(), 'isPortListening').callsFake(async (port: number) => port === 18080);
+      internals().tomcatProcess = { exitCode: null, signalCode: null };
+
+      assert.strictEqual(await internals().waitForStartup(1000), true);
+    });
+
+    it('offers a free debug port when the configured one is taken', async () => {
+      const server = await listenOnFreePort();
+      try {
+        const busy = (server.address() as net.AddressInfo).port;
+        const update = sandbox.stub().resolves();
+        sandbox.stub(internals(), 'getConfiguration').returns({
+          get: (key: string, fallback: unknown) => (key === 'debugPort' ? busy : fallback),
+          update,
+        });
+        sandbox.stub(internals(), 'isPortListening').resolves(false);
+        sandbox.stub(vscode.window, 'showWarningMessage').callsFake(
+          (async (_message: string, ...items: string[]) => items[0]) as unknown as typeof vscode.window.showWarningMessage,
+        );
+
+        const chosen = await internals().resolveDebugPort();
+
+        assert.ok(chosen && chosen > busy);
+        assert.ok(update.calledWith('debugPort', chosen));
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
   });
 
   describe('buildCommand() paths with spaces', () => {

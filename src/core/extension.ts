@@ -105,6 +105,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     Logger.getInstance().error('TurboCat: Failed to prepare Tomcat for debug attach.', true);
                     return null;
                 }
+                // Attach to this project's JDWP port, which may differ from
+                // launch.json when the configured port was taken by another project
+                debugConfiguration.port = tomcat?.getDebugPort() ?? debugConfiguration.port;
             } catch (error) {
                 const detail = error instanceof Error ? error : String(error);
                 Logger.getInstance().error('TurboCat: Failed to prepare Tomcat for debug attach.', true, detail);

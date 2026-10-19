@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-10-19
+
+### Fixed
+- **Debugging a second project on the same debug port**: before starting in debug mode, TurboCat checks that `turbocat.debugPort` is free. When another project's Tomcat already uses it, TurboCat offers the next free port, saves it as this project's `turbocat.debugPort`, and the TurboCat attach profile connects to the port actually in use.
+- **False "Tomcat started" reports**: a start only counts as successful once Tomcat listens on its HTTP or shutdown port; a JVM that exits during startup (e.g. `JDWP ... bind failed: Address already in use`) is reported immediately instead of as started.
+- **Port conflicts with another project's Tomcat**: start and debug start refuse to launch when this project's HTTP or shutdown port is already taken, instead of reporting the other server as ours.
+- **Port detection**: `netstat` matching is exact, so port 800 no longer matches a listener on 8000.
+
 ## [1.7.6] - 2026-10-17
 
 ### Added

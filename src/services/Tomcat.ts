@@ -38,6 +38,9 @@ export class Tomcat {
   private deployPath: string;
   private readonly processOwnership = new ProcessOwnership();
   private activeCatalinaBase: string | null = null;
+  // JDWP port of the current debug run; the attach profile connects to it
+  private activeDebugPort: number | undefined;
+  private static readonly STARTUP_TIMEOUT_MS = 30000;
 
   private readonly PORT_RANGE = { min: 1024, max: 49151 };
 
@@ -213,14 +216,19 @@ export class Tomcat {
       this.logger.error(`Failed to sync ports: ${err}`, false),
     );
 
+    if (!(await this.ensureServerPortsFree())) {
+      return false;
+    }
+
     try {
       await this.executeTomcatCommand("start", tomcatHome, javaHome, {
         catalinaBase,
         environment: this.tomcatEnvironment,
       });
-      const started = await this.waitForServerState("running");
+      const started = await this.waitForStartup();
       if (started) {
         this.lastStartMode = "run";
+        this.activeDebugPort = undefined;
         this.logger.success("Tomcat started successfully", showMessages);
         return true;
       }
@@ -258,20 +266,25 @@ export class Tomcat {
       this.logger.error(`Failed to sync ports: ${err}`, false),
     );
 
+    if (!(await this.ensureServerPortsFree())) {
+      return false;
+    }
+    const debugPort = await this.resolveDebugPort();
+    if (!debugPort) {
+      return false;
+    }
+
     try {
-      const debugPort = this.getConfiguration().get<number>(
-        "debugPort",
-        8000,
-      );
       await this.executeTomcatCommand("start", tomcatHome, javaHome, {
         catalinaBase,
         debug: true,
         debugPort,
         environment: this.tomcatDebugEnvironment,
       });
-      const started = await this.waitForServerState("running");
+      const started = await this.waitForStartup();
       if (started) {
         this.lastStartMode = "debug";
+        this.activeDebugPort = debugPort;
         this.logger.success(
           `Tomcat started in debug mode on port ${debugPort}`,
           showMessages,
@@ -401,6 +414,14 @@ export class Tomcat {
     }
 
     return this.startDebug(showMessages);
+  }
+
+  /** JDWP port of the running debug session, or the configured port. */
+  public getDebugPort(): number {
+    return (
+      this.activeDebugPort ??
+      this.getConfiguration().get<number>("debugPort", 8000)
+    );
   }
 
   /** Current server state for this project, used by smart deploy reload decisions. */
@@ -1030,12 +1051,129 @@ export class Tomcat {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
+      // Exact match: ":800" must not match ":8000"
+      const portPattern = new RegExp(`[:.]${port}(?!\\d)`);
       return lines.some(
-        (line) => line.includes(`:${port}`) && /(LISTENING|LISTEN)/i.test(line),
+        (line) => portPattern.test(line) && /(LISTENING|LISTEN)/i.test(line),
       );
     } catch {
       return false;
     }
+  }
+
+  /** Whether a TCP port is taken, by netstat or by a failed local bind. */
+  private async isPortInUse(port: number): Promise<boolean> {
+    if (await this.isPortListening(port)) {
+      return true;
+    }
+    return new Promise<boolean>((resolve) => {
+      const server = net.createServer();
+      server.once("error", () => resolve(true));
+      server.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+        server.close(() => resolve(false));
+      });
+    });
+  }
+
+  /**
+   * Before starting, this project's HTTP and shutdown ports must be free.
+   * Otherwise another project's Tomcat holds them: ours fails to bind, and
+   * the other server's listening ports would make it look started.
+   */
+  private async ensureServerPortsFree(): Promise<boolean> {
+    const busy: string[] = [];
+    if (this.port > 0 && (await this.isPortInUse(this.port))) {
+      busy.push(`HTTP port ${this.port} (turbocat.port)`);
+    }
+    if (this.shutdownPort > 0 && (await this.isPortInUse(this.shutdownPort))) {
+      busy.push(`shutdown port ${this.shutdownPort} (turbocat.shutdownPort)`);
+    }
+    if (!busy.length) {
+      return true;
+    }
+    this.logger.error(
+      `Cannot start Tomcat: ${busy.join(" and ")} already in use, probably by another project's Tomcat. Configure different ports for this project.`,
+      true,
+    );
+    return false;
+  }
+
+  /**
+   * Configured JDWP port, or a free one the user accepts when it is taken
+   * (typically by another project being debugged on the same port).
+   */
+  private async resolveDebugPort(): Promise<number | undefined> {
+    const configured = this.getConfiguration().get<number>("debugPort", 8000);
+    if (!(await this.isPortInUse(configured))) {
+      return configured;
+    }
+
+    let candidate: number | undefined;
+    for (let port = configured + 1; port <= Math.min(configured + 50, this.PORT_RANGE.max); port++) {
+      if (
+        port !== this.port &&
+        port !== this.shutdownPort &&
+        !(await this.isPortInUse(port))
+      ) {
+        candidate = port;
+        break;
+      }
+    }
+
+    const message = `Debug port ${configured} is already in use, probably by another project's Tomcat in debug mode.`;
+    this.logger.warn(message);
+    if (!candidate) {
+      this.logger.error(
+        `${message} Set a different turbocat.debugPort for this project.`,
+        true,
+      );
+      return undefined;
+    }
+
+    const useCandidate = `Use port ${candidate}`;
+    const choice = await vscode.window.showWarningMessage(
+      `${message} Use port ${candidate} for this project instead? (saved as turbocat.debugPort)`,
+      useCandidate,
+    );
+    if (choice !== useCandidate) {
+      return undefined;
+    }
+    await this.getConfiguration().update(
+      "debugPort",
+      candidate,
+      vscode.ConfigurationTarget.WorkspaceFolder,
+    );
+    this.logger.info(`turbocat.debugPort set to ${candidate} for this project`);
+    return candidate;
+  }
+
+  /**
+   * Wait until the spawned Tomcat listens on its HTTP or shutdown port.
+   * Fails as soon as the process exits (e.g. JDWP could not bind its port);
+   * a merely alive process does not count as started.
+   */
+  private async waitForStartup(
+    timeoutMs: number = Tomcat.STARTUP_TIMEOUT_MS,
+  ): Promise<boolean> {
+    const child = this.tomcatProcess;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (child && (child.exitCode !== null || child.signalCode !== null)) {
+        this.logger.error(
+          `Tomcat exited during startup (exit code ${child.exitCode ?? child.signalCode}). See the output above for the cause.`,
+          true,
+        );
+        return false;
+      }
+      if (
+        (this.port > 0 && (await this.isPortListening(this.port))) ||
+        (this.shutdownPort > 0 && (await this.isPortListening(this.shutdownPort)))
+      ) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
   }
 
   /**
