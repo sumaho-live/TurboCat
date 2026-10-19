@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-10-19
+
+### Fixed
+- **"Address already in use" with distinct ports**: start, debug start, stop, reload, clean and port updates for a project now run one at a time, and a request identical to one in progress joins it. Overlapping requests (e.g. the Debug button and a debugger attach, or a smart deploy reload) used to launch two JVMs with the same debug port, so the second failed with `JDWP ... bind failed: Address already in use` and "Tomcat started in debug mode" was logged twice.
+- **Configured ports not applied to server.xml**: the HTTP and shutdown ports from the settings are written into the project's `server.xml` before every start. Previously they were only applied when changed while VS Code was running, so a new workspace Tomcat base kept Tomcat's defaults (8080/8005) even when different ports were configured.
+
 ## [1.7.7] - 2026-10-19
 
 ### Fixed

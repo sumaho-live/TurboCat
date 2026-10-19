@@ -216,6 +216,86 @@ describe('Tomcat Tests', () => {
     });
   });
 
+  describe('lifecycle serialization', () => {
+    type Impl = {
+      startDebugServer(show: boolean): Promise<boolean>;
+      stopServer(show: boolean): Promise<boolean>;
+      startServer(show: boolean): Promise<boolean>;
+    };
+
+    it('joins a debug start that is already in progress instead of launching a second JVM', async () => {
+      let finish!: (value: boolean) => void;
+      const impl = sandbox.stub(tomcat as unknown as Impl, 'startDebugServer').returns(
+        new Promise<boolean>((resolve) => { finish = resolve; }),
+      );
+
+      const first = tomcat.startDebug(false);
+      const second = tomcat.startDebug(false);
+      await new Promise((resolve) => setImmediate(resolve));
+      finish(true);
+
+      assert.deepStrictEqual(await Promise.all([first, second]), [true, true]);
+      assert.strictEqual(impl.callCount, 1);
+    });
+
+    it('runs different lifecycle requests one after another', async () => {
+      const order: string[] = [];
+      let finishStop!: (value: boolean) => void;
+      sandbox.stub(tomcat as unknown as Impl, 'stopServer').callsFake(() => {
+        order.push('stop:begin');
+        return new Promise<boolean>((resolve) => { finishStop = resolve; });
+      });
+      sandbox.stub(tomcat as unknown as Impl, 'startServer').callsFake(async () => {
+        order.push('start');
+        return true;
+      });
+
+      const stopped = tomcat.stop(false);
+      const started = tomcat.start(false);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepStrictEqual(order, ['stop:begin']);
+
+      order.push('stop:end');
+      finishStop(true);
+      await Promise.all([stopped, started]);
+
+      assert.deepStrictEqual(order, ['stop:begin', 'stop:end', 'start']);
+    });
+
+    it('keeps the queue usable after a failed request', async () => {
+      sandbox.stub(tomcat as unknown as Impl, 'stopServer').rejects(new Error('boom'));
+      sandbox.stub(tomcat as unknown as Impl, 'startServer').resolves(true);
+
+      await assert.rejects(tomcat.stop(false), /boom/);
+      assert.strictEqual(await tomcat.start(false), true);
+    });
+  });
+
+  it('writes the configured ports into a stale server.xml before starting', async () => {
+    const confDir = path.join(tempRoot, 'conf');
+    fs.mkdirSync(confDir, { recursive: true });
+    const serverXmlPath = path.join(confDir, 'server.xml');
+    // Fresh workspace base: Tomcat's defaults, although settings say otherwise
+    fs.writeFileSync(serverXmlPath, [
+      '<Server port="8005" shutdown="SHUTDOWN">',
+      '  <Connector port="8080" protocol="HTTP/1.1" />',
+      '</Server>'
+    ].join('\n'));
+    const internals = tomcat as unknown as {
+      port: number;
+      shutdownPort: number;
+      syncServerXmlPorts(catalinaBase: string): Promise<void>;
+    };
+    internals.port = 9090;
+    internals.shutdownPort = 9005;
+
+    await internals.syncServerXmlPorts(tempRoot);
+
+    const updated = fs.readFileSync(serverXmlPath, 'utf8');
+    assert.match(updated, /<Server port="9005"/);
+    assert.match(updated, /<Connector port="9090"/);
+  });
+
   describe('buildCommand() paths with spaces', () => {
     it('preserves java executable path when JAVA_HOME contains spaces', () => {
       const javaHomeWithSpaces = process.platform === 'win32'

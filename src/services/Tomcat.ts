@@ -41,6 +41,8 @@ export class Tomcat {
   // JDWP port of the current debug run; the attach profile connects to it
   private activeDebugPort: number | undefined;
   private static readonly STARTUP_TIMEOUT_MS = 30000;
+  private lifecycleTail: Promise<unknown> = Promise.resolve();
+  private readonly lifecycleInFlight = new Map<string, Promise<unknown>>();
 
   private readonly PORT_RANGE = { min: 1024, max: 49151 };
 
@@ -195,9 +197,66 @@ export class Tomcat {
   }
 
   /**
+   * Run start/stop/reload one at a time. A request identical to one already
+   * in flight joins it; overlapping requests used to launch two JVMs with
+   * the same ports, and the second failed with "Address already in use".
+   */
+  private runLifecycle<T>(kind: string, task: () => Promise<T>): Promise<T> {
+    const running = this.lifecycleInFlight.get(kind) as Promise<T> | undefined;
+    if (running) {
+      this.logger.debug(`Tomcat ${kind} already in progress; waiting for it`);
+      return running;
+    }
+    const run: Promise<T> = this.lifecycleTail.then(task).finally(() => {
+      if (this.lifecycleInFlight.get(kind) === run) {
+        this.lifecycleInFlight.delete(kind);
+      }
+    });
+    this.lifecycleInFlight.set(kind, run);
+    this.lifecycleTail = run.catch(() => undefined);
+    return run;
+  }
+
+  public start(showMessages: boolean = false): Promise<boolean> {
+    return this.runLifecycle("start", () => this.startServer(showMessages));
+  }
+
+  public startDebug(showMessages: boolean = true): Promise<boolean> {
+    return this.runLifecycle("debug start", () =>
+      this.startDebugServer(showMessages),
+    );
+  }
+
+  public stop(showMessages: boolean = false): Promise<boolean> {
+    return this.runLifecycle("stop", () => this.stopServer(showMessages));
+  }
+
+  /**
+   * Ensure Tomcat is running in debug mode before attaching the debugger.
+   * Automatically restarts the server in debug mode when necessary.
+   */
+  public ensureDebugModeActive(showMessages: boolean = false): Promise<boolean> {
+    return this.runLifecycle("debug attach", () =>
+      this.ensureDebugModeServer(showMessages),
+    );
+  }
+
+  public reload(): Promise<void> {
+    return this.runLifecycle("reload", () => this.reloadServer());
+  }
+
+  public clean(): Promise<void> {
+    return this.runLifecycle("clean", () => this.cleanServer());
+  }
+
+  public updatePort(): Promise<void> {
+    return this.runLifecycle("port update", () => this.applyPortChange());
+  }
+
+  /**
    * Start Tomcat server
    */
-  public async start(showMessages: boolean = false): Promise<boolean> {
+  private async startServer(showMessages: boolean): Promise<boolean> {
     const tomcatHome = await this.findTomcatHome();
     const javaHome = await this.findJavaHome();
     if (!tomcatHome || !javaHome) {
@@ -212,9 +271,10 @@ export class Tomcat {
     }
 
     // Sync ports to server.xml before starting
-    await this.updatePort().catch((err) =>
+    await this.applyPortChange().catch((err) =>
       this.logger.error(`Failed to sync ports: ${err}`, false),
     );
+    await this.syncServerXmlPorts(catalinaBase);
 
     if (!(await this.ensureServerPortsFree())) {
       return false;
@@ -247,7 +307,7 @@ export class Tomcat {
   /**
    * Start Tomcat in debug mode
    */
-  public async startDebug(showMessages: boolean = true): Promise<boolean> {
+  private async startDebugServer(showMessages: boolean): Promise<boolean> {
     const tomcatHome = await this.findTomcatHome();
     const javaHome = await this.findJavaHome();
     if (!tomcatHome || !javaHome) {
@@ -262,9 +322,10 @@ export class Tomcat {
     }
 
     // Sync ports to server.xml before starting
-    await this.updatePort().catch((err) =>
+    await this.applyPortChange().catch((err) =>
       this.logger.error(`Failed to sync ports: ${err}`, false),
     );
+    await this.syncServerXmlPorts(catalinaBase);
 
     if (!(await this.ensureServerPortsFree())) {
       return false;
@@ -319,7 +380,7 @@ export class Tomcat {
    *
    * @log Error if shutdown sequence fails
    */
-  public async stop(showMessages: boolean = false): Promise<boolean> {
+  private async stopServer(showMessages: boolean): Promise<boolean> {
     const tomcatHome = await this.findTomcatHome();
     const javaHome = await this.findJavaHome();
     if (!tomcatHome || !javaHome) {
@@ -394,13 +455,7 @@ export class Tomcat {
     }
   }
 
-  /**
-   * Ensure Tomcat is running in debug mode before attaching the debugger.
-   * Automatically restarts the server in debug mode when necessary.
-   */
-  public async ensureDebugModeActive(
-    showMessages: boolean = false,
-  ): Promise<boolean> {
+  private async ensureDebugModeServer(showMessages: boolean): Promise<boolean> {
     const running = await this.isTomcatRunning();
     if (running && this.lastStartMode === "debug") {
       return true;
@@ -413,7 +468,7 @@ export class Tomcat {
       );
     }
 
-    return this.startDebug(showMessages);
+    return this.startDebugServer(showMessages);
   }
 
   /** JDWP port of the running debug session, or the configured port. */
@@ -443,7 +498,7 @@ export class Tomcat {
    *
    * @log Error if reload fails with diagnostic information
    */
-  public async reload(): Promise<void> {
+  private async reloadServer(): Promise<void> {
     if (!(await this.findTomcatHome()) || !(await this.findJavaHome())) {
       return;
     }
@@ -454,8 +509,8 @@ export class Tomcat {
     if (!wasRunning) {
       this.logger.info("Tomcat is not running, starting it...");
       const started = wasDebugMode
-        ? await this.startDebug(true)
-        : await this.start(true);
+        ? await this.startDebugServer(true)
+        : await this.startServer(true);
 
       if (!started) {
         this.logger.error("Tomcat reload failed: unable to start Tomcat.", true);
@@ -468,8 +523,8 @@ export class Tomcat {
       this.logger.clearOutput();
 
       const restarted = wasDebugMode
-        ? await this.startDebug(false)
-        : await this.start(false);
+        ? await this.startDebugServer(false)
+        : await this.startServer(false);
 
       if (restarted) {
         this.logger.success(
@@ -493,7 +548,7 @@ export class Tomcat {
    *
    * @log Error if cleanup fails with filesystem details
    */
-  public async clean(): Promise<void> {
+  private async cleanServer(): Promise<void> {
     const tomcatHome = await this.findTomcatHome();
     const javaHome = await this.findJavaHome();
     if (!tomcatHome || !javaHome) {
@@ -959,7 +1014,7 @@ export class Tomcat {
    *
    * @log Error with detailed validation messages
    */
-  public async updatePort(): Promise<void> {
+  private async applyPortChange(): Promise<void> {
     const config = this.getConfiguration();
     const newPort = config.get<number>("port", 8080);
     const newShutdownPort = config.get<number>("shutdownPort", 8005);
@@ -1058,6 +1113,28 @@ export class Tomcat {
       );
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Write the configured ports into server.xml before every start.
+   * applyPortChange only reacts to changes it observes while running, so a
+   * server.xml copied from Tomcat's defaults (8080/8005) or ports changed
+   * while VS Code was closed would otherwise never reach Tomcat.
+   */
+  private async syncServerXmlPorts(catalinaBase: string): Promise<void> {
+    try {
+      const changed = await this.modifyServerXmlPorts(catalinaBase, {
+        http: this.port,
+        shutdown: this.shutdownPort,
+      });
+      if (changed) {
+        this.logger.info(
+          `Updated server.xml ports (HTTP: ${this.port}, Shutdown: ${this.shutdownPort})`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`Could not sync ports to server.xml: ${err}`);
     }
   }
 
@@ -1224,7 +1301,7 @@ export class Tomcat {
   private async modifyServerXmlPorts(
     tomcatHome: string,
     ports: { http: number; shutdown: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const serverXmlPath = path.join(tomcatHome, "conf", "server.xml");
     const content = await fsp.readFile(serverXmlPath, "utf8");
 
@@ -1268,9 +1345,11 @@ export class Tomcat {
     }
 
     // Only write back if content actually changed
-    if (updatedContent !== content) {
-      await fsp.writeFile(serverXmlPath, updatedContent);
+    if (updatedContent === content) {
+      return false;
     }
+    await fsp.writeFile(serverXmlPath, updatedContent);
+    return true;
   }
 
   /**
@@ -1521,7 +1600,7 @@ export class Tomcat {
     }
 
     this.logger.info("Stopping Tomcat before operation...", showMessages);
-    const stoppedGracefully = await this.stop(showMessages);
+    const stoppedGracefully = await this.stopServer(showMessages);
 
     if (stoppedGracefully || !(await this.isTomcatRunning())) {
       return true;
