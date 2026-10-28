@@ -32,6 +32,7 @@ All settings live under the `turbocat.*` namespace. Key options:
 | --- | --- | --- |
 | `turbocat.home` / `turbocat.javaHome` | Optional overrides for discovery | Takes priority over system `JAVA_HOME`; prompted on first launch if left blank |
 | `turbocat.port` / `turbocat.debugPort` | Server & debug ports | Validated and written back to Tomcat configuration |
+| `turbocat.debugAutoAttach` | Attach the VS Code Java debugger after a debug start | Default `true`; requires *Debugger for Java*; override per project in `.vscode/settings.json` |
 | `turbocat.shutdownPort` | Tomcat shutdown socket | Must differ from the HTTP port; updates server.xml and restarts on demand |
 | `turbocat.smartDeploy` | `Disable` or `Smart` | Enables dual-watcher deployment |
 | `turbocat.smartDeployDebounce` | Batch delay for compiled classes | Default 300 ms |
@@ -106,6 +107,7 @@ Each mapping uses workspace-relative paths. TurboCat automatically appends `**/*
 Mappings that end in `.class` also teach Smart Deploy where to watch for compiled output. For example, setting `"source": "target/classes/**/*.class"` switches all background class sync from the legacy `bin/` folder to Maven’s output automatically.
 
 ## Java Debugging
+- The **Debug** button (`TurboCat: Start in Debug Mode`) starts Tomcat in debug mode and attaches the VS Code Java debugger to the project's JDWP port automatically; a reload in debug mode re-attaches after the restart. Requires the *Debugger for Java* extension. Turn it off with `"turbocat.debugAutoAttach": false` in user settings, or only for one project in its `.vscode/settings.json`.
 - Run **`TurboCat: Generate Java Debug Profile`** to create or refresh `.vscode/launch.json` with the correct attach configuration.
 - Launch the generated **“Attach to Tomcat (TurboCat)”** configuration from VS Code’s Run and Debug panel. TurboCat now checks Tomcat’s status and, when needed, restarts it in debug mode automatically before VS Code attaches.
 - Use `turbocat.tomcatDebugEnvironment` for debug-only JVM flags (e.g. enabling remote monitors) while keeping `turbocat.tomcatEnvironment` reserved for standard starts.

@@ -271,6 +271,47 @@ describe('Tomcat Tests', () => {
     });
   });
 
+  describe('debug start notification', () => {
+    const stubDebugStart = (): void => {
+      const internals = tomcat as unknown as Record<string, unknown>;
+      sandbox.stub(internals, 'findTomcatHome' as never).resolves(tempRoot as never);
+      sandbox.stub(internals, 'findJavaHome' as never).resolves(tempRoot as never);
+      sandbox.stub(internals, 'getCatalinaBase' as never).resolves(tempRoot as never);
+      sandbox.stub(internals, 'ensureTomcatStopped' as never).resolves(true as never);
+      sandbox.stub(internals, 'applyPortChange' as never).resolves(undefined as never);
+      sandbox.stub(internals, 'syncServerXmlPorts' as never).resolves(undefined as never);
+      sandbox.stub(internals, 'ensureServerPortsFree' as never).resolves(true as never);
+      sandbox.stub(internals, 'resolveDebugPort' as never).resolves(8123 as never);
+      sandbox.stub(internals, 'executeTomcatCommand' as never).resolves(undefined as never);
+      sandbox.stub(internals, 'waitForStartup' as never).resolves(true as never);
+      sandbox.stub(internals, 'isTomcatRunning' as never).resolves(false as never);
+    };
+
+    it('announces the JDWP port after the Debug button starts Tomcat', async () => {
+      stubDebugStart();
+      const ports: number[] = [];
+      const listener = Tomcat.onDidStartDebug(event => ports.push(event.port));
+      try {
+        assert.strictEqual(await tomcat.startDebug(false), true);
+      } finally {
+        listener.dispose();
+      }
+      assert.deepStrictEqual(ports, [8123]);
+    });
+
+    it('stays silent when a debugger attach profile starts Tomcat', async () => {
+      stubDebugStart();
+      const ports: number[] = [];
+      const listener = Tomcat.onDidStartDebug(event => ports.push(event.port));
+      try {
+        assert.strictEqual(await tomcat.ensureDebugModeActive(false), true);
+      } finally {
+        listener.dispose();
+      }
+      assert.deepStrictEqual(ports, []);
+    });
+  });
+
   it('writes the configured ports into a stale server.xml before starting', async () => {
     const confDir = path.join(tempRoot, 'conf');
     fs.mkdirSync(confDir, { recursive: true });

@@ -7,6 +7,8 @@ import * as vscode from 'vscode';
 import { Logger } from '../services/Logger';
 import { Toolbar } from '../services/Toolbar';
 import { DebugProfile } from '../services/DebugProfile';
+import { DebugAttacher } from '../services/DebugAttacher';
+import { Tomcat } from '../services/Tomcat';
 import iconv from 'iconv-lite';
 import { getWorkspaceConfiguration } from './workspace';
 import { ProjectRuntime, ProjectRuntimeRegistry } from './ProjectRuntimeRegistry';
@@ -34,6 +36,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
 
+
+    const debugAttacher = new DebugAttacher();
+    context.subscriptions.push(
+        debugAttacher,
+        Tomcat.onDidStartDebug(({ workspaceFolder, port }) => {
+            if (workspaceFolder) {
+                void debugAttacher.attach(workspaceFolder, port);
+            }
+        })
+    );
 
     context.subscriptions.push(
         vscode.commands.registerCommand('turbocat.start', () => runtimeRegistry?.forResource()?.tomcat.start(true)),

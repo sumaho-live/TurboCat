@@ -262,6 +262,12 @@
           "errorMessage": "Debug port must be between 1024-49151",
           "description": "The debug port number for the Tomcat server in debug mode, allowed range is 1024-49151."
         },
+        "turbocat.debugAutoAttach": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Attach the VS Code Java debugger automatically after the Debug button (`TurboCat: Start in Debug Mode`) or a reload in debug mode starts Tomcat. Requires the *Debugger for Java* extension. Set globally as a default or override it for a Workspace Folder."
+        },
         "turbocat.port": {
           "type": "number",
           "default": 8080,

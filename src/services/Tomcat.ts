@@ -22,8 +22,21 @@ import {
 } from "../core/workspace";
 
 const execAsync = promisify(exec);
+
+export interface DebugStartEvent {
+  readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
+  readonly port: number;
+}
+
 export class Tomcat {
   private static readonly instances = new Map<string, Tomcat>();
+  private static readonly debugStartEmitter =
+    new vscode.EventEmitter<DebugStartEvent>();
+  /**
+   * Fires when the Debug button or a reload starts Tomcat in debug mode.
+   * Not fired for a debugger attach profile, which connects on its own.
+   */
+  public static readonly onDidStartDebug = Tomcat.debugStartEmitter.event;
   private readonly workspaceFolder: vscode.WorkspaceFolder | undefined;
   private readonly logger: Logger;
   private tomcatHome: string;
@@ -307,7 +320,10 @@ export class Tomcat {
   /**
    * Start Tomcat in debug mode
    */
-  private async startDebugServer(showMessages: boolean): Promise<boolean> {
+  private async startDebugServer(
+    showMessages: boolean,
+    notifyStarted: boolean = true,
+  ): Promise<boolean> {
     const tomcatHome = await this.findTomcatHome();
     const javaHome = await this.findJavaHome();
     if (!tomcatHome || !javaHome) {
@@ -350,6 +366,12 @@ export class Tomcat {
           `Tomcat started in debug mode on port ${debugPort}`,
           showMessages,
         );
+        if (notifyStarted) {
+          Tomcat.debugStartEmitter.fire({
+            workspaceFolder: this.workspaceFolder,
+            port: debugPort,
+          });
+        }
         return true;
       }
 
@@ -468,7 +490,7 @@ export class Tomcat {
       );
     }
 
-    return this.startDebugServer(showMessages);
+    return this.startDebugServer(showMessages, false);
   }
 
   /** JDWP port of the running debug session, or the configured port. */
