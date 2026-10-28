@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-28
+
 ### Added
 - **Automatic debugger attach**: the Debug button (`TurboCat: Start in Debug Mode`) now attaches the VS Code Java debugger to the project's JDWP port once Tomcat is up, and reconnects after a reload in debug mode (manual or after a deployment). Controlled by `turbocat.debugAutoAttach` (default `true`), which can be overridden per project in Workspace Folder settings. Skipped when a Java debugger is already attached to that port or *Debugger for Java* is not installed; the "Attach to Tomcat (TurboCat)" launch profile keeps attaching on its own.
 
